@@ -3,26 +3,31 @@ using Microsoft.EntityFrameworkCore;
 namespace NtagCmacApi.Persistence;
 
 /// <summary>
-/// EF Core-backed <see cref="IReplayGuard"/>. Registered scoped alongside <see cref="NtagDbContext"/>
-/// so that <see cref="PreCheckAsync"/> and <see cref="CommitAsync"/> within the same request
-/// operate on the same tracked <see cref="TagReplayState"/> instance, and <see cref="CommitAsync"/>
-/// relies on EF Core's optimistic-concurrency check (via <see cref="TagReplayState.LastAcceptedCounter"/>
-/// being a concurrency token) to atomically detect a concurrent winner - the persistent,
-/// multi-instance-safe equivalent of the previous in-memory CAS loop.
+/// EF Core-backed <see cref="IReplayGuard"/>. Depends only on a <see cref="DbSet{TEntity}"/>
+/// of <see cref="TagReplayState"/> and an <see cref="IUnitOfWork"/> for committing changes -
+/// not on the concrete <see cref="NtagDbContext"/> - so it stays decoupled from EF Core's
+/// <c>DbContext</c> type while still relying on EF Core's optimistic-concurrency check (via
+/// <see cref="TagReplayState.LastAcceptedCounter"/> being a concurrency token) to atomically
+/// detect a concurrent winner - the persistent, multi-instance-safe equivalent of the
+/// previous in-memory CAS loop. Registered scoped alongside <see cref="NtagDbContext"/> so
+/// that <see cref="PreCheckAsync"/> and <see cref="CommitAsync"/> within the same request
+/// operate on the same tracked <see cref="TagReplayState"/> instance.
 /// </summary>
 public sealed class EfReplayGuard : IReplayGuard
 {
-    private readonly NtagDbContext _dbContext;
+    private readonly DbSet<TagReplayState> _tagReplayStates;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public EfReplayGuard(NtagDbContext dbContext)
+    public EfReplayGuard(DbSet<TagReplayState> tagReplayStates, IUnitOfWork unitOfWork)
     {
-        _dbContext = dbContext;
+        _tagReplayStates = tagReplayStates;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<ReplayPreCheckResult> PreCheckAsync(string uidHex, long counter, string cmacHex, CancellationToken cancellationToken)
     {
         string uid = uidHex.ToUpperInvariant();
-        TagReplayState? state = await _dbContext.TagReplayStates.FindAsync([uid], cancellationToken);
+        TagReplayState? state = await _tagReplayStates.FindAsync([uid], cancellationToken);
 
         if (state is null)
         {
@@ -49,11 +54,11 @@ public sealed class EfReplayGuard : IReplayGuard
 
         try
         {
-            TagReplayState? state = await _dbContext.TagReplayStates.FindAsync([uid], cancellationToken);
+            TagReplayState? state = await _tagReplayStates.FindAsync([uid], cancellationToken);
 
             if (state is null)
             {
-                _dbContext.TagReplayStates.Add(new TagReplayState
+                _tagReplayStates.Add(new TagReplayState
                 {
                     Uid = uid,
                     LastAcceptedCounter = counter,
@@ -66,7 +71,7 @@ public sealed class EfReplayGuard : IReplayGuard
                 if (counter <= state.LastAcceptedCounter)
                 {
                     // Lost the race between this request's pre-check and commit: another
-                    // request already advanced (or matched) the counter first.
+                    // request already advanced the counter first.
                     return ReplayCommitResult.Rejected;
                 }
 
@@ -75,7 +80,7 @@ public sealed class EfReplayGuard : IReplayGuard
                 state.LastAcceptedAtUtc = DateTimeOffset.UtcNow;
             }
 
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
             return ReplayCommitResult.Accepted;
         }
         catch (DbUpdateConcurrencyException)

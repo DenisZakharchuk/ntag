@@ -25,7 +25,7 @@ public class EfReplayGuardTests
     public async Task PreCheck_NoStoredState_ReturnsProceed()
     {
         await using NtagDbContext db = CreateContext(nameof(PreCheck_NoStoredState_ReturnsProceed));
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayPreCheckResult result = await guard.PreCheckAsync("04A1B2C3D4E5F6", 1, "AABBCCDDEEFF0011", CancellationToken.None);
 
@@ -43,7 +43,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayPreCheckResult result = await guard.PreCheckAsync("uid1", 6, "NEWCMAC", CancellationToken.None);
 
@@ -61,7 +61,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 4, "SOMEOTHERCMAC", CancellationToken.None);
 
@@ -79,7 +79,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 5, "matchingcmac", CancellationToken.None);
 
@@ -97,7 +97,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 5, "DIFFERENTCMAC", CancellationToken.None);
 
@@ -108,7 +108,7 @@ public class EfReplayGuardTests
     public async Task Commit_NewUid_InsertsRowAndReturnsAccepted()
     {
         await using NtagDbContext db = CreateContext(nameof(Commit_NewUid_InsertsRowAndReturnsAccepted));
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayCommitResult result = await guard.CommitAsync("UID1", 1, "CMAC1", CancellationToken.None);
 
@@ -130,7 +130,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayCommitResult result = await guard.CommitAsync("UID1", 6, "NEWCMAC", CancellationToken.None);
 
@@ -150,7 +150,7 @@ public class EfReplayGuardTests
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db);
+        var guard = new EfReplayGuard(db.TagReplayStates, db);
 
         ReplayCommitResult result = await guard.CommitAsync("UID1", 5, "NEWCMAC", CancellationToken.None);
 
@@ -177,8 +177,8 @@ public class EfReplayGuardTests
 
         await using NtagDbContext dbA = CreateContext(dbName);
         await using NtagDbContext dbB = CreateContext(dbName);
-        var guardA = new EfReplayGuard(dbA);
-        var guardB = new EfReplayGuard(dbB);
+        var guardA = new EfReplayGuard(dbA.TagReplayStates, dbA);
+        var guardB = new EfReplayGuard(dbB.TagReplayStates, dbB);
 
         // Both "requests" read the same pre-race state via their own pre-check first.
         await guardA.PreCheckAsync("UID1", 6, "CMAC_A", CancellationToken.None);

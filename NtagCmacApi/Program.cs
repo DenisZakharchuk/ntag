@@ -25,6 +25,11 @@ builder.Services.AddDbContext<NtagDbContext>(options =>
         // case "Npgsql": options.UseNpgsql(builder.Configuration.GetConnectionString("Ntag")); break;
     }
 });
+// DbSet<T> isn't registered by AddDbContext by default, so EfReplayGuard (and anything
+// else that only needs this one entity set) can depend on it - and on IUnitOfWork for
+// committing - instead of the concrete NtagDbContext/DbContext.
+builder.Services.AddScoped(sp => sp.GetRequiredService<NtagDbContext>().TagReplayStates);
+builder.Services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<NtagDbContext>());
 builder.Services.AddScoped<IReplayGuard, EfReplayGuard>();
 
 // --- Master key resolution: network-based lookup service. Never accepted from the caller. ---
@@ -42,14 +47,10 @@ builder.Services.AddHttpClient<ITagKeyProvider, HttpTagKeyProvider>((serviceProv
 // --- Outcome notification: hidden behind an abstraction; logs for now. ---
 builder.Services.AddSingleton<IOutcomeNotifier, LoggingOutcomeNotifier>();
 
-// --- SOLID composition root for the CMAC crypto core: each policy is registered
-// independently (and can be swapped, e.g. an ISdmMacMessagePolicy for AN12196 Table 5)
-// without touching the verifier itself. ---
-builder.Services.AddSingleton<IAesCmacCalculator, AesCmacCalculator>();
-builder.Services.AddSingleton<ISdmSessionVectorBuilder, Sv2SessionVectorBuilder>();
-builder.Services.AddSingleton<ISdmMacMessagePolicy, EmptyCmacMessagePolicy>();
-builder.Services.AddSingleton<ISdmMacTruncationPolicy, OddByteOffsetTruncationPolicy>();
-builder.Services.AddSingleton<INtag424CmacVerifier, Ntag424CmacVerifier>();
+// --- SOLID composition root for the CMAC crypto core: registered via AddCmac() so each
+// policy (e.g. an ISdmMacMessagePolicy for AN12196 Table 5) can be swapped without
+// touching this file or the verifier itself. ---
+builder.Services.AddCmac();
 
 // --- Orchestrator: sequences request validation -> replay pre-check -> key lookup ->
 // CMAC verify -> replay commit -> outcome notification. ---

@@ -2,7 +2,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace NtagCmacApi.Persistence;
 
-public sealed class NtagDbContext : DbContext
+public sealed class NtagDbContext : DbContext, IUnitOfWork
 {
     public NtagDbContext(DbContextOptions<NtagDbContext> options) : base(options)
     {
