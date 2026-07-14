@@ -166,9 +166,44 @@ Ntag424Cmac/                      SOLID verifier implementation (single source o
   INtag424CmacVerifier.cs /
   Ntag424CmacVerifier.cs          Orchestrator composed from the policies above via DI.
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
+  Persistence/                    EF Core replay-guard state store.
+    TagReplayState.cs             Entity: per-UID last-accepted counter/CMAC.
+    NtagDbContext.cs              DbContext; LastAcceptedCounter is an EF Core
+                                  concurrency token (portable across providers, unlike a
+                                  SQL-Server-only rowversion column).
+    IReplayGuard.cs /
+    EfReplayGuard.cs              Async pre-check (cheap, before network/crypto) + commit
+                                  (conditional update, rejects on lost optimistic-
+                                  concurrency race) split — the DB-backed equivalent of the
+                                  old ConcurrentDictionary.TryUpdate CAS loop.
+  KeyProvider/                    Master-key resolution over the network.
+    ITagKeyProvider.cs            Found / NotFound / ServiceError result contract.
+    TagKeyServiceOptions.cs       Options bound from "Ntag:KeyService" config.
+    HttpTagKeyProvider.cs         Typed HttpClient implementation; fails closed (maps all
+                                  network/timeout/malformed-response errors to
+                                  ServiceError) rather than throwing.
+  Orchestration/                  Composes the pipeline for one verification request.
+    SdmVerifyCommand.cs           Plain-string DTO (crosses async boundaries; the crypto
+                                  core's ref struct request cannot).
+    SdmVerificationOutcome.cs     Closed-set sealed record hierarchy (MalformedRequest,
+                                  ReplayRejected, TagKeyUnavailable, CmacInvalid,
+                                  ReplayLostRace, DuplicateOfLastAccepted, Accepted) —
+                                  enables exhaustive handling of each failure stage.
+    ISdmVerificationOrchestrator.cs /
+    SdmVerificationOrchestrator.cs Sequences replay pre-check -> key lookup -> CMAC verify
+                                  -> replay commit -> outcome notification. A fixed
+                                  pipeline (not itself a Strategy); each step it composes
+                                  is independently swappable via DI.
+  Notifications/                  Reporting outcomes to an external "master system".
+    IOutcomeNotifier.cs           Abstraction; called for every outcome, success or not.
+    LoggingOutcomeNotifier.cs     Placeholder implementation — logs instead of calling a
+                                  real system. A failing notifier is swallowed and never
+                                  changes the HTTP response.
 NtagCmacApi.Tests/                xUnit tests (RFC 4493 + official NXP AN12196 vectors,
-                                  plus end-to-end self-consistency checks) — all exercise
-                                  the abstractions above directly.
+                                  end-to-end self-consistency checks, EF Core replay-guard
+                                  concurrency tests, HTTP key-provider fake-handler tests,
+                                  and orchestrator sequencing tests with hand-written
+                                  fakes) — all exercise the abstractions above directly.
 ```
 
 ## 6. The web API
@@ -184,18 +219,43 @@ Request body:
 Response: `{ "valid": true|false }` always — no distinguishing error reasons, so the
 endpoint can't be used to enumerate registered UIDs or the reason verification failed.
 
-Design decisions:
+The request is handled by `ISdmVerificationOrchestrator`
+([`SdmVerificationOrchestrator.cs`](NtagCmacApi/Orchestration/SdmVerificationOrchestrator.cs)),
+which sequences the following steps and reports the resulting `SdmVerificationOutcome`
+to `IOutcomeNotifier` before returning:
 
-- **The master key is never accepted from the client.** It's resolved server-side per
-  UID via `ITagKeyProvider` (demo implementation reads `Ntag:TagKeys:{UID}` from
-  configuration — swap in a database/HSM-backed provider for production; do not commit
-  real keys to `appsettings.json`).
-- **Replay protection.** `IReplayGuard` (in-memory, per-UID) rejects a request whose
-  counter is not strictly greater than the last accepted counter for that UID. This is
-  checked only *after* the CMAC has been validated, and the check-and-record is atomic
-  per UID to avoid a race between two concurrent requests for the same tag. For a
-  multi-instance deployment, replace the in-memory dictionary with a shared store
-  (Redis/SQL).
+1. **Replay pre-check** ([`EfReplayGuard.PreCheckAsync`](NtagCmacApi/Persistence/EfReplayGuard.cs)) —
+   cheap, before any network call or crypto. Rejects a stale counter outright, and
+   recognizes an exact repeat of the last accepted `(counter, cmac)` pair as a safe
+   idempotent retry (`DuplicateOfLastAccepted`) rather than an attack.
+2. **Master-key resolution** ([`HttpTagKeyProvider`](NtagCmacApi/KeyProvider/HttpTagKeyProvider.cs)) —
+   the master key is **never accepted from the client**. It's resolved server-side per
+   UID over HTTP from an external key service (`Ntag:KeyService:BaseUrl` in
+   configuration). Any network failure, timeout, or malformed response fails closed to
+   `ServiceError` rather than throwing.
+3. **CMAC verification** — the existing zero-allocation, synchronous crypto core
+   (`INtag424CmacVerifier`, unchanged), invoked with the resolved key.
+4. **Replay commit** ([`EfReplayGuard.CommitAsync`](NtagCmacApi/Persistence/EfReplayGuard.cs)) —
+   persists the newly-verified counter as the new accepted state for that UID via EF
+   Core, using an **optimistic-concurrency token** on `LastAcceptedCounter`
+   (`NtagDbContext`) instead of a single in-process `ConcurrentDictionary.TryUpdate`.
+   This closes the race window that separating "check" from "record" across a network
+   call (step 2) and crypto (step 3) would otherwise reopen: if two concurrent requests
+   for the same UID both pass pre-check and reach commit, only one `SaveChangesAsync`
+   wins — the other throws `DbUpdateConcurrencyException` (or `DbUpdateException` on a
+   racing first insert), which is caught and reported as `ReplayLostRace`, never
+   silently overwritten. This design is durable and safe across multiple app instances,
+   unlike the previous in-memory dictionary.
+
+Persistence uses **EF Core** (`NtagDbContext`) with the provider selected via
+`Ntag:Persistence:Provider` in configuration (currently only `InMemory`, for local dev
+and tests — switching to `SqlServer`/`Npgsql` only requires adding the provider package,
+a connection string, and EF Core migrations; no application code changes).
+
+Regardless of the outcome — success or any failure stage — the orchestrator always
+invokes `IOutcomeNotifier` to report it to an external "master system" (currently a
+placeholder `LoggingOutcomeNotifier`). A failing notifier is caught and logged but never
+changes the returned outcome or the HTTP response.
 
 ## 7. Running
 

@@ -1,18 +1,60 @@
-using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
 using Ntag424.Cmac;
+using NtagCmacApi.KeyProvider;
+using NtagCmacApi.Notifications;
+using NtagCmacApi.Orchestration;
+using NtagCmacApi.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSingleton<ITagKeyProvider, ConfigurationTagKeyProvider>();
-builder.Services.AddSingleton<IReplayGuard, InMemoryReplayGuard>();
+// --- Persistence: replay-protection state (per-UID last accepted counter/CMAC) ---
+// Provider is switchable via config so the same code path works with InMemory (default,
+// for local dev/tests) and a real DBMS (SqlServer/Npgsql) in production - swapping only
+// requires adding the provider package, a connection string, and (for a real DBMS) EF Core
+// migrations; no application code changes.
+string persistenceProvider = builder.Configuration["Ntag:Persistence:Provider"] ?? "InMemory";
+builder.Services.AddDbContext<NtagDbContext>(options =>
+{
+    switch (persistenceProvider)
+    {
+        case "InMemory":
+        default:
+            options.UseInMemoryDatabase("NtagCmacApi");
+            break;
+        // case "SqlServer": options.UseSqlServer(builder.Configuration.GetConnectionString("Ntag")); break;
+        // case "Npgsql": options.UseNpgsql(builder.Configuration.GetConnectionString("Ntag")); break;
+    }
+});
+builder.Services.AddScoped<IReplayGuard, EfReplayGuard>();
 
-// SOLID composition root: each policy is registered independently (and can be swapped,
-// e.g. an ISdmMacMessagePolicy for AN12196 Table 5) without touching the verifier itself.
+// --- Master key resolution: network-based lookup service. Never accepted from the caller. ---
+builder.Services.Configure<TagKeyServiceOptions>(builder.Configuration.GetSection(TagKeyServiceOptions.SectionName));
+builder.Services.AddHttpClient<ITagKeyProvider, HttpTagKeyProvider>((serviceProvider, httpClient) =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<TagKeyServiceOptions>>().Value;
+    if (!string.IsNullOrEmpty(options.BaseUrl))
+    {
+        httpClient.BaseAddress = new Uri(options.BaseUrl);
+    }
+    httpClient.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+});
+
+// --- Outcome notification: hidden behind an abstraction; logs for now. ---
+builder.Services.AddSingleton<IOutcomeNotifier, LoggingOutcomeNotifier>();
+
+// --- SOLID composition root for the CMAC crypto core: each policy is registered
+// independently (and can be swapped, e.g. an ISdmMacMessagePolicy for AN12196 Table 5)
+// without touching the verifier itself. ---
 builder.Services.AddSingleton<IAesCmacCalculator, AesCmacCalculator>();
 builder.Services.AddSingleton<ISdmSessionVectorBuilder, Sv2SessionVectorBuilder>();
 builder.Services.AddSingleton<ISdmMacMessagePolicy, EmptyCmacMessagePolicy>();
 builder.Services.AddSingleton<ISdmMacTruncationPolicy, OddByteOffsetTruncationPolicy>();
 builder.Services.AddSingleton<INtag424CmacVerifier, Ntag424CmacVerifier>();
+
+// --- Orchestrator: sequences request validation -> replay pre-check -> key lookup ->
+// CMAC verify -> replay commit -> outcome notification. ---
+builder.Services.AddSingleton<ISdmVerifyCommandValidationPolicy, SdmVerifyCommandValidationPolicy>();
+builder.Services.AddScoped<ISdmVerificationOrchestrator, SdmVerificationOrchestrator>();
 
 var app = builder.Build();
 
@@ -20,51 +62,21 @@ app.MapGet("/", () => "NTAG 424 DNA SDM CMAC verifier is running.");
 
 // Mirrors the query parameters an NTAG 424 DNA tag places in its SDM URL
 // (e.g. ?uid=...&ctr=...&cmac=...). The master key is NEVER accepted from the
-// caller - it is looked up server-side per UID, otherwise anyone could forge a
-// valid MAC by simply supplying their own key.
-app.MapPost("/api/sdm/verify", (
+// caller - it is looked up server-side per UID via the network key service.
+app.MapPost("/api/sdm/verify", async (
     SdmVerifyRequest request,
-    ITagKeyProvider tagKeyProvider,
-    IReplayGuard replayGuard,
-    INtag424CmacVerifier cmacVerifier) =>
+    ISdmVerificationOrchestrator orchestrator,
+    CancellationToken cancellationToken) =>
 {
-    if (string.IsNullOrEmpty(request.Uid) ||
-        string.IsNullOrEmpty(request.Counter) ||
-        string.IsNullOrEmpty(request.Cmac))
-    {
-        return Results.Ok(new SdmVerifyResponse(false));
-    }
+    SdmVerificationOutcome outcome = await orchestrator.VerifyAsync(
+        new SdmVerifyCommand(request.Uid, request.Counter, request.Cmac),
+        cancellationToken);
 
-    if (!tagKeyProvider.TryGetMasterKeyBase64(request.Uid, out string? masterKeyBase64))
-    {
-        // Unknown tag: still return a generic "false" so callers cannot use this
-        // endpoint to enumerate which UIDs are registered.
-        return Results.Ok(new SdmVerifyResponse(false));
-    }
-
-    bool cmacValid = cmacVerifier.Verify(new Ntag424SdmCmacRequest(
-        request.Uid,
-        request.Counter,
-        request.Cmac,
-        masterKeyBase64));
-
-    if (!cmacValid)
-    {
-        return Results.Ok(new SdmVerifyResponse(false));
-    }
-
-    // The SDM read counter must strictly increase between successful reads,
-    // otherwise a captured URL could be replayed indefinitely. This check must
-    // happen only *after* the MAC is confirmed valid, and the counter must be
-    // atomically checked-and-recorded to avoid a race between two concurrent
-    // requests for the same tag.
-    if (!int.TryParse(request.Counter, System.Globalization.NumberStyles.HexNumber, null, out int counterValue) ||
-        !replayGuard.TryAcceptCounter(request.Uid, counterValue))
-    {
-        return Results.Ok(new SdmVerifyResponse(false));
-    }
-
-    return Results.Ok(new SdmVerifyResponse(true));
+    // Always a generic { valid: bool } response with no distinguishing error reasons, to
+    // avoid leaking whether a UID is registered or why verification failed (avoid oracle
+    // attacks). A duplicate-of-last-accepted request is reported as valid too, since it is
+    // a safe idempotent retry, not an attack replay.
+    return Results.Ok(new SdmVerifyResponse(outcome.IsSuccess));
 });
 
 app.Run();
@@ -73,72 +85,3 @@ internal record SdmVerifyRequest(string Uid, string Counter, string Cmac);
 
 internal record SdmVerifyResponse(bool Valid);
 
-/// <summary>
-/// Resolves the per-tag AES master key used to derive the SDM session key.
-/// Looked up by UID so that a leaked key for one tag cannot be used to forge
-/// MACs for another, and so the key is never transmitted by the caller.
-/// </summary>
-internal interface ITagKeyProvider
-{
-    bool TryGetMasterKeyBase64(string uidHex, out string? masterKeyBase64);
-}
-
-/// <summary>
-/// Reads per-tag keys from configuration ("Ntag:TagKeys:{UID}").
-/// Replace with a database- or HSM-backed provider for production use.
-/// </summary>
-internal sealed class ConfigurationTagKeyProvider : ITagKeyProvider
-{
-    private readonly IConfiguration _configuration;
-
-    public ConfigurationTagKeyProvider(IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
-
-    public bool TryGetMasterKeyBase64(string uidHex, out string? masterKeyBase64)
-    {
-        string? value = _configuration[$"Ntag:TagKeys:{uidHex.ToUpperInvariant()}"];
-        masterKeyBase64 = value;
-        return !string.IsNullOrEmpty(value);
-    }
-}
-
-/// <summary>
-/// Tracks the last accepted SDM read counter per UID to reject replayed reads.
-/// In-memory only; use a shared store (e.g. Redis/SQL) for multi-instance deployments.
-/// </summary>
-internal interface IReplayGuard
-{
-    bool TryAcceptCounter(string uidHex, int counter);
-}
-
-internal sealed class InMemoryReplayGuard : IReplayGuard
-{
-    private readonly ConcurrentDictionary<string, int> _lastCounterByUid = new();
-
-    public bool TryAcceptCounter(string uidHex, int counter)
-    {
-        string key = uidHex.ToUpperInvariant();
-        while (true)
-        {
-            if (_lastCounterByUid.TryGetValue(key, out int lastCounter))
-            {
-                if (counter <= lastCounter)
-                {
-                    return false;
-                }
-
-                if (_lastCounterByUid.TryUpdate(key, counter, lastCounter))
-                {
-                    return true;
-                }
-                // Another request updated it concurrently; retry with fresh value.
-            }
-            else if (_lastCounterByUid.TryAdd(key, counter))
-            {
-                return true;
-            }
-        }
-    }
-}

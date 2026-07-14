@@ -10,4 +10,8 @@
     <Compile Include="..\Ntag424Cmac\**\*.cs" Link="Ntag424Cmac\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
+  </ItemGroup>
+
 </Project>
