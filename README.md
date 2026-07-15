@@ -83,10 +83,15 @@ CMAC still runs its full algorithm on this empty input: it pads it to one block
 encryption — the "incomplete block" branch of `ComputeAesCmac`, with `message.Length == 0`.
 
 > **Scope note:** if a tag is configured to mirror additional file data between
-> `SDMMACInputOffset` and `SDMMACOffset` (AN12196 Table 5 — e.g. an encrypted file
-> payload plus literal URL text like `&cmac=`), the message becomes the literal ASCII
-> bytes of that mirrored region instead of being empty. That configuration is **not**
-> currently supported by `VerifyCmac`, which assumes the simple Table 4 case.
+> `SDMMACInputOffset` and `SDMMACOffset` (AN12196 Table 5 - e.g. an encrypted file
+> payload, plaintext file data, or literal URL text like a static `serial=` value), the
+> message becomes the literal bytes of that mirrored region instead of being empty. This
+> IS now supported via `MirroredDataCmacMessagePolicy` (select it with
+> `Ntag:MacMessagePolicy:Type = "MirroredData"`) - see section 6 below. **It has not been
+> validated against an official NXP Table 5 vector**, only against self-consistency tests
+> (unlike Table 4, which is confirmed against NXP's official worked example) - confirm
+> against your tag's real configuration/a known-valid captured read before relying on it
+> in production.
 
 ### 2.5 Truncate to 8 bytes
 
@@ -159,12 +164,29 @@ Ntag424Cmac/                      SOLID verifier implementation (single source o
   ISdmSessionVectorBuilder.cs /
   Sv2SessionVectorBuilder.cs      SV2 construction policy.
   ISdmMacMessagePolicy.cs /
-  EmptyCmacMessagePolicy.cs       Final-MAC message policy (AN12196 Table 4; Table 5
-                                  mirrored-data support can be added as a new policy).
+  EmptyCmacMessagePolicy.cs       Table 4 final-MAC message policy (empty message).
+  MirroredDataCmacMessagePolicy.cs Table 5 final-MAC message policy (MACs the literal
+                                  bytes mirrored between SDMMACInputOffset/SDMMACOffset,
+                                  e.g. a static `serial=` value) - NOT yet validated
+                                  against an official NXP vector, self-consistency tested
+                                  only.
   ISdmMacTruncationPolicy.cs /
   OddByteOffsetTruncationPolicy.cs Truncation policy.
+  IMasterKeyCodec.cs / Base64MasterKeyCodec.cs   Master-key wire-decoding policy.
+  IUidCodec.cs / HexUidCodec.cs                  UID wire-decoding policy (literal hex
+                                                  bytes, written order).
+  ICounterCodec.cs / LiteralHexCounterCodec.cs   Default counter-decoding policy (literal
+                                                  hex bytes, written order - matches NXP's
+                                                  official AN12196 Table 4 vector).
+  NumericLittleEndianCounterCodec.cs             Alternate counter-decoding policy: parses
+                                                  ctr as a number, re-encodes little-endian/
+                                                  LSB-first - confirmed correct for a real
+                                                  captured tag read (combined with Table 5).
   INtag424CmacVerifier.cs /
   Ntag424CmacVerifier.cs          Orchestrator composed from the policies above via DI.
+  ServiceCollectionExtensions.cs  `AddCmac(macMessagePolicy, counterCodec)` composition-root
+                                  helper; selects Table 4 vs Table 5 message policy and
+                                  counter byte-order convention by name.
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
   Persistence/                    EF Core replay-guard state store.
     TagReplayState.cs             Entity: per-UID last-accepted counter/CMAC.
@@ -199,22 +221,66 @@ NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
     LoggingOutcomeNotifier.cs     Placeholder implementation — logs instead of calling a
                                   real system. A failing notifier is swallowed and never
                                   changes the HTTP response.
+  UrlParsing/                     Optional convenience: accept the raw scanned URL.
+    ISdmUrlParser.cs /
+    SdmUrlParser.cs               Extracts uid/ctr/mac query params and computes the
+                                  AN12196 Table 5 mirrored-data message automatically
+                                  (literal query text up to and including "mac=") so
+                                  callers can submit the exact tag-scanned URL instead of
+                                  pre-splitting it themselves. Malformed URLs/missing
+                                  fields yield an empty command, letting the existing
+                                  validation policy classify it as MalformedRequest.
 NtagCmacApi.Tests/                xUnit tests (RFC 4493 + official NXP AN12196 vectors,
                                   end-to-end self-consistency checks, EF Core replay-guard
                                   concurrency tests, HTTP key-provider fake-handler tests,
-                                  and orchestrator sequencing tests with hand-written
-                                  fakes) — all exercise the abstractions above directly.
+                                  orchestrator sequencing tests with hand-written fakes,
+                                  codec unit tests, a CONFIRMED real-captured-tag-read
+                                  regression test, and raw-URL-parsing end-to-end tests) —
+                                  all exercise the abstractions above directly.
 ```
 
 ## 6. The web API
 
 `POST /api/sdm/verify`
 
-Request body:
+Request body — either discrete fields:
 
 ```json
 { "uid": "04A1B2C3D4E5F6", "counter": "000001", "cmac": "9130AE6B05189C97" }
 ```
+
+...or the raw scanned URL directly (parsed via `ISdmUrlParser`, which also derives the
+AN12196 Table 5 mirrored-data message automatically — see below):
+
+```json
+{ "url": "https://example.com/?serial=11111111&uid=04B43132502390&ctr=000001&mac=E7D76C550FF1755B" }
+```
+
+
+If the tag's SDM configuration is AN12196 Table 5 (`SDMMACInputOffset != SDMMACOffset`,
+e.g. a static `serial=` value or other mirrored data sits between the two MAC offsets),
+also set `Ntag:MacMessagePolicy:Type` to `"MirroredData"` and include that literal mirrored
+text in the request body:
+
+```json
+{ "uid": "04A1B2C3D4E5F6", "counter": "000001", "cmac": "...", "mirroredData": "serial=548721" }
+```
+
+**This Table 5 support has now been CONFIRMED against a real captured tag read** (not just
+self-consistency) - see
+[`RealWorldTable5NumericCounterVerificationTests.cs`](NtagCmacApi.Tests/RealWorldTable5NumericCounterVerificationTests.cs),
+cross-validated against an independent BouncyCastle-based implementation. That confirmed
+vector required combining **two** settings, neither of which alone reproduces the MAC:
+
+- `Ntag:MacMessagePolicy:Type = "MirroredData"` - message = the literal query text from
+  right after `?` through and including the literal `mac=` text (i.e. `SDMMACOffset` lands
+  exactly where the truncated MAC's hex digits begin).
+- `Ntag:CounterCodec:Type = "NumericLittleEndian"` - the `ctr` field is parsed as a plain
+  number and re-encoded little-endian/LSB-first for the SV2 session vector, rather than
+  decoded literally in written byte order. NXP's own official AN12196 Table 4 vector uses
+  the literal-byte-order convention directly (the default, `"LiteralHex"`) - different
+  deployments have been observed to use either convention, so confirm which applies to your
+  tags (ideally against a real captured read) before choosing.
 
 Response: `{ "valid": true|false }` always — no distinguishing error reasons, so the
 endpoint can't be used to enumerate registered UIDs or the reason verification failed.

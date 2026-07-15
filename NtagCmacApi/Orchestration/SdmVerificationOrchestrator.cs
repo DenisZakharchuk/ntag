@@ -94,7 +94,8 @@ public sealed class SdmVerificationOrchestrator : ISdmVerificationOrchestrator
         }
 
         // 3. Verify the CMAC (existing zero-alloc, synchronous crypto core - unchanged).
-        bool cmacValid = _cmacVerifier.Verify(new Ntag424SdmCmacRequest(uid, counterHex, cmacHex, keyLookup.MasterKeyBase64));
+        bool cmacValid = _cmacVerifier.Verify(new Ntag424SdmCmacRequest(
+            uid, counterHex, cmacHex, keyLookup.MasterKeyBase64, command.MirroredData ?? string.Empty));
         if (!cmacValid)
         {
             return new SdmVerificationOutcome.CmacInvalid(uid, counterHex);

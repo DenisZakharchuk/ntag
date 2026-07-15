@@ -4,6 +4,7 @@ using NtagCmacApi.KeyProvider;
 using NtagCmacApi.Notifications;
 using NtagCmacApi.Orchestration;
 using NtagCmacApi.Persistence;
+using NtagCmacApi.UrlParsing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -48,14 +49,24 @@ builder.Services.AddHttpClient<ITagKeyProvider, HttpTagKeyProvider>((serviceProv
 builder.Services.AddSingleton<IOutcomeNotifier, LoggingOutcomeNotifier>();
 
 // --- SOLID composition root for the CMAC crypto core: registered via AddCmac() so each
-// policy (e.g. an ISdmMacMessagePolicy for AN12196 Table 5) can be swapped without
-// touching this file or the verifier itself. ---
-builder.Services.AddCmac();
+// policy (e.g. an ISdmMacMessagePolicy for AN12196 Table 5, or an ICounterCodec for a
+// different ctr byte-order convention) can be swapped without touching this file or the
+// verifier itself. Selected via config: macMessagePolicy "EmptyMessage" (default,
+// AN12196 Table 4) / "MirroredData" (AN12196 Table 5); counterCodec "LiteralHex"
+// (default, matches NXP's official vector) / "NumericLittleEndian" (confirmed correct for
+// at least one real captured tag read - see ICounterCodec remarks).
+string macMessagePolicy = builder.Configuration["Ntag:MacMessagePolicy:Type"] ?? "EmptyMessage";
+string counterCodec = builder.Configuration["Ntag:CounterCodec:Type"] ?? "LiteralHex";
+builder.Services.AddCmac(macMessagePolicy, counterCodec);
 
 // --- Orchestrator: sequences request validation -> replay pre-check -> key lookup ->
 // CMAC verify -> replay commit -> outcome notification. ---
 builder.Services.AddSingleton<ISdmVerifyCommandValidationPolicy, SdmVerifyCommandValidationPolicy>();
 builder.Services.AddScoped<ISdmVerificationOrchestrator, SdmVerificationOrchestrator>();
+
+// --- Raw-URL parsing: lets callers submit the exact SDM URL text (as scanned from the
+// tag) instead of pre-splitting it into uid/counter/cmac/mirrored-data fields themselves. ---
+builder.Services.AddSingleton<ISdmUrlParser, SdmUrlParser>();
 
 var app = builder.Build();
 
@@ -64,14 +75,21 @@ app.MapGet("/", () => "NTAG 424 DNA SDM CMAC verifier is running.");
 // Mirrors the query parameters an NTAG 424 DNA tag places in its SDM URL
 // (e.g. ?uid=...&ctr=...&cmac=...). The master key is NEVER accepted from the
 // caller - it is looked up server-side per UID via the network key service.
+//
+// Accepts EITHER the raw scanned URL (request.Url - parsed via ISdmUrlParser, which also
+// derives the AN12196 Table 5 mirrored-data message automatically) OR pre-split
+// uid/counter/cmac/mirroredData fields directly. If Url is supplied it takes precedence.
 app.MapPost("/api/sdm/verify", async (
     SdmVerifyRequest request,
     ISdmVerificationOrchestrator orchestrator,
+    ISdmUrlParser urlParser,
     CancellationToken cancellationToken) =>
 {
-    SdmVerificationOutcome outcome = await orchestrator.VerifyAsync(
-        new SdmVerifyCommand(request.Uid, request.Counter, request.Cmac),
-        cancellationToken);
+    SdmVerifyCommand command = !string.IsNullOrWhiteSpace(request.Url)
+        ? urlParser.Parse(request.Url)
+        : new SdmVerifyCommand(request.Uid, request.Counter, request.Cmac, request.MirroredData);
+
+    SdmVerificationOutcome outcome = await orchestrator.VerifyAsync(command, cancellationToken);
 
     // Always a generic { valid: bool } response with no distinguishing error reasons, to
     // avoid leaking whether a UID is registered or why verification failed (avoid oracle
@@ -82,7 +100,12 @@ app.MapPost("/api/sdm/verify", async (
 
 app.Run();
 
-internal record SdmVerifyRequest(string Uid, string Counter, string Cmac);
+internal record SdmVerifyRequest(
+    string Uid = "",
+    string Counter = "",
+    string Cmac = "",
+    string? MirroredData = null,
+    string? Url = null);
 
 internal record SdmVerifyResponse(bool Valid);
 

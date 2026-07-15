@@ -21,13 +21,19 @@ namespace Ntag424.Cmac;
 public interface ISdmMacMessagePolicy
 {
     /// <summary>
-    /// The length in bytes of the message this policy will write for the given UID/counter.
+    /// The length in bytes of the message this policy will write for the given
+    /// UID/counter/mirrored data.
     /// </summary>
-    int GetMessageLength(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter);
+    int GetMessageLength(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, ReadOnlySpan<byte> mirroredData);
 
     /// <summary>
     /// Writes the message to be MACed into <paramref name="message"/>, which must be at
     /// least <see cref="GetMessageLength"/> bytes.
     /// </summary>
-    void WriteMessage(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, Span<byte> message);
+    /// <param name="mirroredData">
+    /// The literal bytes mirrored/present between <c>SDMMACInputOffset</c> and
+    /// <c>SDMMACOffset</c> on the tag's NDEF template (Table 5 case only). Empty for a
+    /// Table 4 tag configuration; a Table 4 policy ignores this parameter entirely.
+    /// </param>
+    void WriteMessage(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, ReadOnlySpan<byte> mirroredData, Span<byte> message);
 }

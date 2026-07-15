@@ -22,15 +22,27 @@ public readonly ref struct Ntag424SdmCmacRequest
     /// <summary>16-byte AES-128 master key for this tag, Base64-encoded.</summary>
     public ReadOnlySpan<char> MasterKeyBase64 { get; }
 
+    /// <summary>
+    /// The literal ASCII bytes mirrored between <c>SDMMACInputOffset</c> and
+    /// <c>SDMMACOffset</c> on the tag's NDEF template (AN12196 Table 5 case only) -
+    /// e.g. static URL text and/or mirrored plaintext file data. Empty for the common
+    /// Table 4 case (<c>SDMMACInputOffset == SDMMACOffset</c>), where nothing besides
+    /// UID/counter/CMAC is mirrored and the final CMAC message is empty by definition.
+    /// Ignored entirely by a Table 4 <see cref="ISdmMacMessagePolicy"/>.
+    /// </summary>
+    public ReadOnlySpan<char> MirroredDataAscii { get; }
+
     public Ntag424SdmCmacRequest(
         ReadOnlySpan<char> uidHex,
         ReadOnlySpan<char> counterHex,
         ReadOnlySpan<char> receivedCmacHex,
-        ReadOnlySpan<char> masterKeyBase64)
+        ReadOnlySpan<char> masterKeyBase64,
+        ReadOnlySpan<char> mirroredDataAscii = default)
     {
         UidHex = uidHex;
         CounterHex = counterHex;
         ReceivedCmacHex = receivedCmacHex;
         MasterKeyBase64 = masterKeyBase64;
+        MirroredDataAscii = mirroredDataAscii;
     }
 }

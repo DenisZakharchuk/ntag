@@ -10,10 +10,11 @@ namespace Ntag424.Cmac;
 /// </summary>
 public sealed class EmptyCmacMessagePolicy : ISdmMacMessagePolicy
 {
-    public int GetMessageLength(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter) => 0;
+    public int GetMessageLength(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, ReadOnlySpan<byte> mirroredData) => 0;
 
-    public void WriteMessage(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, Span<byte> message)
+    public void WriteMessage(ReadOnlySpan<byte> uid, ReadOnlySpan<byte> counter, ReadOnlySpan<byte> mirroredData, Span<byte> message)
     {
-        // Nothing to write - the message is empty by definition.
+        // Nothing to write - the message is empty by definition. mirroredData is ignored:
+        // a Table 4 tag configuration has no mirrored data between the two MAC offsets.
     }
 }
