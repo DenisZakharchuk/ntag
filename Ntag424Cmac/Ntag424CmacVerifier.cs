@@ -2,6 +2,11 @@ using System;
 using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
+using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Cryptography;
+using Ntag424.Cmac.MessagePolicies;
+using Ntag424.Cmac.SessionVectors;
+using Ntag424.Cmac.Truncation;
 
 namespace Ntag424.Cmac;
 

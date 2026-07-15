@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// Default <see cref="IUidCodec"/>: the UID hex text is decoded directly to bytes in

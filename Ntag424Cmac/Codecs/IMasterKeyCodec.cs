@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// Decodes the tag's AES-128 master key from its wire representation into raw bytes.

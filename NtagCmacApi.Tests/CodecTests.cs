@@ -1,5 +1,6 @@
 using System;
 using Ntag424.Cmac;
+using Ntag424.Cmac.Codecs;
 using Xunit;
 
 namespace NtagCmacApi.Tests;

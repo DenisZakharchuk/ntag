@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// Default <see cref="ICounterCodec"/>, matching NXP's official AN12196 Table 4 worked

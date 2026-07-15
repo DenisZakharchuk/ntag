@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Truncation;
 
 /// <summary>
 /// Truncates a full 16-byte AES-CMAC down to the shorter value actually transmitted by

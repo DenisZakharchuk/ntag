@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// Decodes the tag's 7-byte UID from its wire (hex) representation into raw bytes.

@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Cryptography;
 
 /// <summary>
 /// Computes an AES-128 CMAC (RFC 4493 / NIST SP 800-38B) over a message with a given key.

@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// Default <see cref="IMasterKeyCodec"/>: standard Base64 decoding to a 16-byte AES-128 key.

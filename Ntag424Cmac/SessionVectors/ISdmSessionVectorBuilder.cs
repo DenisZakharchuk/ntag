@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.SessionVectors;
 
 /// <summary>
 /// Builds the 16-byte SDM "Session Vector" (SV2) used to derive the per-read session key

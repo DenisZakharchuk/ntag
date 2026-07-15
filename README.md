@@ -60,7 +60,7 @@ This is **not** a plain `AES-ECB(MasterKey, SV2)` encryption. `SV2` is exactly o
 16-byte block, so per RFC 4493 CMAC still XORs it with subkey `K1` (derived from
 `MasterKey`) before the final AES encryption. Skipping that XOR silently produces a
 key that will never match a real tag — this was the first bug found in the original
-AI-generated version of this file (see [`AesCmacCalculator.ComputeCmac`](Ntag424Cmac/AesCmacCalculator.cs)).
+AI-generated version of this file (see [`AesCmacCalculator.ComputeCmac`](Ntag424Cmac/Cryptography/AesCmacCalculator.cs)).
 
 ### 2.4 MAC an empty message
 
@@ -155,44 +155,72 @@ more than "it builds and one manual run looked fine."
 ## 5. Project layout
 
 ```
-Ntag424Cmac/                      SOLID verifier implementation (single source of truth;
-                                  no project duplicates it — both projects below link to
-                                  these files via <Compile Include="..\Ntag424Cmac\**\*.cs">).
-  Ntag424SdmCmacRequest.cs        readonly ref struct wrapping VerifyCmac's inputs.
-  IAesCmacCalculator.cs /
-  AesCmacCalculator.cs            RFC 4493 AES-CMAC primitive.
-  ISdmSessionVectorBuilder.cs /
-  Sv2SessionVectorBuilder.cs      SV2 construction policy.
-  ISdmMacMessagePolicy.cs /
-  EmptyCmacMessagePolicy.cs       Table 4 final-MAC message policy (empty message).
-  MirroredDataCmacMessagePolicy.cs Table 5 final-MAC message policy (MACs the literal
-                                  bytes mirrored between SDMMACInputOffset/SDMMACOffset,
-                                  e.g. a static `serial=` value) - NOT yet validated
-                                  against an official NXP vector, self-consistency tested
-                                  only.
-  ISdmMacTruncationPolicy.cs /
-  OddByteOffsetTruncationPolicy.cs Truncation policy.
-  IMasterKeyCodec.cs / Base64MasterKeyCodec.cs   Master-key wire-decoding policy.
-  IUidCodec.cs / HexUidCodec.cs                  UID wire-decoding policy (literal hex
-                                                  bytes, written order).
-  ICounterCodec.cs / LiteralHexCounterCodec.cs   Default counter-decoding policy (literal
-                                                  hex bytes, written order - matches NXP's
-                                                  official AN12196 Table 4 vector).
-  NumericLittleEndianCounterCodec.cs             Alternate counter-decoding policy: parses
-                                                  ctr as a number, re-encodes little-endian/
-                                                  LSB-first - confirmed correct for a real
-                                                  captured tag read (combined with Table 5).
+Ntag424Cmac/                      SOLID verifier implementation, its own class library
+                                  project (`Ntag424Cmac.csproj`, net10.0) - both projects
+                                  below reference it via `<ProjectReference>` rather than
+                                  linking its source files in directly. Organized as one
+                                  sub-namespace per concern, folder name matching
+                                  namespace suffix (e.g. `Codecs/` -> `Ntag424.Cmac.Codecs`).
+  Ntag424Cmac.csproj              Class library project file; only external dependency is
+                                  `Microsoft.Extensions.DependencyInjection` (for
+                                  `ServiceCollectionExtensions.AddCmac`).
+  Ntag424SdmCmacRequest.cs        readonly ref struct wrapping VerifyCmac's inputs
+                                  (namespace `Ntag424.Cmac` - the library's public surface).
   INtag424CmacVerifier.cs /
-  Ntag424CmacVerifier.cs          Orchestrator composed from the policies above via DI.
-  ServiceCollectionExtensions.cs  `AddCmac(macMessagePolicy, counterCodec)` composition-root
-                                  helper; selects Table 4 vs Table 5 message policy and
-                                  counter byte-order convention by name.
+  Ntag424CmacVerifier.cs          Orchestrator composed from the policies below via DI
+                                  (namespace `Ntag424.Cmac`).
+  ServiceCollectionExtensions.cs  `AddCmac(Action<CmacOptions>? configure)` composition-root
+                                  helper (options-delegate pattern, matching ASP.NET Core's
+                                  own composition-root APIs, e.g. `AddDbContext<T>(options =>
+                                  ...)`); selects Table 4 vs Table 5 message policy and
+                                  counter byte-order convention via `CmacOptions`.
+  CmacOptions.cs                  `MacMessagePolicyKind`/`CounterCodecKind` enums + the
+                                  `CmacOptions` POCO configured by the delegate above.
+  Cryptography/                   namespace `Ntag424.Cmac.Cryptography`
+    IAesCmacCalculator.cs /
+    AesCmacCalculator.cs          RFC 4493 AES-CMAC primitive.
+  SessionVectors/                 namespace `Ntag424.Cmac.SessionVectors`
+    ISdmSessionVectorBuilder.cs /
+    Sv2SessionVectorBuilder.cs    SV2 construction policy.
+  MessagePolicies/                namespace `Ntag424.Cmac.MessagePolicies`
+    ISdmMacMessagePolicy.cs /
+    EmptyCmacMessagePolicy.cs     Table 4 final-MAC message policy (empty message).
+    MirroredDataCmacMessagePolicy.cs Table 5 final-MAC message policy (MACs the literal
+                                  bytes mirrored between SDMMACInputOffset/SDMMACOffset,
+                                  e.g. a static `serial=` value or a full query string up
+                                  to and including `mac=`) - CONFIRMED against a real
+                                  captured tag read (see section 6).
+  Truncation/                     namespace `Ntag424.Cmac.Truncation`
+    ISdmMacTruncationPolicy.cs /
+    OddByteOffsetTruncationPolicy.cs Truncation policy.
+  Codecs/                         namespace `Ntag424.Cmac.Codecs`
+    IMasterKeyCodec.cs / Base64MasterKeyCodec.cs   Master-key wire-decoding policy.
+    IUidCodec.cs / HexUidCodec.cs                  UID wire-decoding policy (literal hex
+                                                    bytes, written order).
+    ICounterCodec.cs / LiteralHexCounterCodec.cs   Default counter-decoding policy (literal
+                                                    hex bytes, written order - matches NXP's
+                                                    official AN12196 Table 4 vector).
+    NumericLittleEndianCounterCodec.cs             Alternate counter-decoding policy: parses
+                                                    ctr as a number, re-encodes little-endian/
+                                                    LSB-first - confirmed correct for a real
+                                                    captured tag read (combined with Table 5).
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
   Persistence/                    EF Core replay-guard state store.
-    TagReplayState.cs             Entity: per-UID last-accepted counter/CMAC.
+    TagReplayState.cs             Entity: per-UID last-accepted counter/CMAC, plus a
+                                  nullable `CompanyId` FK (scaffolded for future
+                                  multi-tenant use - no code path assigns one yet).
+    Company.cs                    Minimal tenant/organization reference entity (Id, Code,
+                                  Name, plus CreatedOn/CreatedBy required + ModifiedOn/
+                                  ModifiedBy nullable audit fields); seeded with a few
+                                  records, not yet managed via API.
     NtagDbContext.cs              DbContext; LastAcceptedCounter is an EF Core
                                   concurrency token (portable across providers, unlike a
-                                  SQL-Server-only rowversion column).
+                                  SQL-Server-only rowversion column). Configures the
+                                  TagReplayState -> Company FK (Restrict on delete) and
+                                  seeds Company rows via HasData.
+    Migrations/                   EF Core migrations (`dotnet ef migrations add ...`) -
+                                  required once a real DBMS (SqlServer/Npgsql) replaces
+                                  InMemory; apply with `dotnet ef database update`.
     IReplayGuard.cs /
     EfReplayGuard.cs              Async pre-check (cheap, before network/crypto) + commit
                                   (conditional update, rejects on lost optimistic-
@@ -314,9 +342,24 @@ to `IOutcomeNotifier` before returning:
    unlike the previous in-memory dictionary.
 
 Persistence uses **EF Core** (`NtagDbContext`) with the provider selected via
-`Ntag:Persistence:Provider` in configuration (currently only `InMemory`, for local dev
-and tests — switching to `SqlServer`/`Npgsql` only requires adding the provider package,
-a connection string, and EF Core migrations; no application code changes).
+`Ntag:Persistence:Provider` in configuration. Default is `SqlServer`, connecting to a
+local SQL Server instance via **Windows Authentication** (`ConnectionStrings:Ntag` -
+`Integrated Security=True`); `InMemory` remains available for local dev/tests without a
+real DB. Switching to `Npgsql` only requires adding the provider package, a connection
+string, and a new EF Core migration; no other application code changes. Schema is managed
+via EF Core Migrations (`NtagCmacApi/Migrations/`) — after any model change, run:
+
+```powershell
+dotnet tool install --global dotnet-ef   # one-time
+cd NtagCmacApi
+dotnet ef migrations add <Name>
+dotnet ef database update
+```
+
+`NtagDbContext` also has a `Company` reference entity (`Id`, `Code`, `Name`), seeded with
+a few sample rows via `HasData`. `TagReplayState.CompanyId` is a nullable FK to it,
+scaffolded for future multi-tenant use — no current code path assigns a company to a tag
+yet.
 
 Regardless of the outcome — success or any failure stage — the orchestrator always
 invokes `IOutcomeNotifier` to report it to an external "master system" (currently a

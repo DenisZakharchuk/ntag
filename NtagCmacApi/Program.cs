@@ -9,20 +9,21 @@ using NtagCmacApi.UrlParsing;
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Persistence: replay-protection state (per-UID last accepted counter/CMAC) ---
-// Provider is switchable via config so the same code path works with InMemory (default,
-// for local dev/tests) and a real DBMS (SqlServer/Npgsql) in production - swapping only
-// requires adding the provider package, a connection string, and (for a real DBMS) EF Core
-// migrations; no application code changes.
+// Provider is switchable via config so the same code path works with InMemory (for local
+// dev/tests) and a real DBMS in production - swapping only requires adding the provider
+// package, a connection string, and EF Core migrations; no other application code changes.
 string persistenceProvider = builder.Configuration["Ntag:Persistence:Provider"] ?? "InMemory";
 builder.Services.AddDbContext<NtagDbContext>(options =>
 {
     switch (persistenceProvider)
     {
+        case "SqlServer":
+            options.UseSqlServer(builder.Configuration.GetConnectionString("Ntag"));
+            break;
         case "InMemory":
         default:
             options.UseInMemoryDatabase("NtagCmacApi");
             break;
-        // case "SqlServer": options.UseSqlServer(builder.Configuration.GetConnectionString("Ntag")); break;
         // case "Npgsql": options.UseNpgsql(builder.Configuration.GetConnectionString("Ntag")); break;
     }
 });
@@ -51,13 +52,23 @@ builder.Services.AddSingleton<IOutcomeNotifier, LoggingOutcomeNotifier>();
 // --- SOLID composition root for the CMAC crypto core: registered via AddCmac() so each
 // policy (e.g. an ISdmMacMessagePolicy for AN12196 Table 5, or an ICounterCodec for a
 // different ctr byte-order convention) can be swapped without touching this file or the
-// verifier itself. Selected via config: macMessagePolicy "EmptyMessage" (default,
-// AN12196 Table 4) / "MirroredData" (AN12196 Table 5); counterCodec "LiteralHex"
-// (default, matches NXP's official vector) / "NumericLittleEndian" (confirmed correct for
-// at least one real captured tag read - see ICounterCodec remarks).
-string macMessagePolicy = builder.Configuration["Ntag:MacMessagePolicy:Type"] ?? "EmptyMessage";
-string counterCodec = builder.Configuration["Ntag:CounterCodec:Type"] ?? "LiteralHex";
-builder.Services.AddCmac(macMessagePolicy, counterCodec);
+// verifier itself. Configured via an options delegate (CmacOptions), the same pattern
+// ASP.NET Core's own composition-root APIs use (e.g. AddDbContext<T>(options => ...)) -
+// MacMessagePolicy defaults to EmptyMessage (AN12196 Table 4); CounterCodec defaults to
+// LiteralHex (matches NXP's official vector). NumericLittleEndian is confirmed correct
+// for at least one real captured tag read - see ICounterCodec remarks.
+builder.Services.AddCmac(options =>
+{
+    if (Enum.TryParse(builder.Configuration["Ntag:MacMessagePolicy:Type"], ignoreCase: true, out MacMessagePolicyKind macMessagePolicy))
+    {
+        options.MacMessagePolicy = macMessagePolicy;
+    }
+
+    if (Enum.TryParse(builder.Configuration["Ntag:CounterCodec:Type"], ignoreCase: true, out CounterCodecKind counterCodec))
+    {
+        options.CounterCodec = counterCodec;
+    }
+});
 
 // --- Orchestrator: sequences request validation -> replay pre-check -> key lookup ->
 // CMAC verify -> replay commit -> outcome notification. ---

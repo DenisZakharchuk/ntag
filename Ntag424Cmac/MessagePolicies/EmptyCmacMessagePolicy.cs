@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.MessagePolicies;
 
 /// <summary>
 /// Default <see cref="ISdmMacMessagePolicy"/> matching NXP AN12196 Table 4

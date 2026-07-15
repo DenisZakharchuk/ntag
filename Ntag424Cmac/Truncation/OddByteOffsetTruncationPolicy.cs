@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Truncation;
 
 /// <summary>
 /// NTAG 424 DNA SDM truncation scheme: keeps the odd-indexed bytes of the full 16-byte

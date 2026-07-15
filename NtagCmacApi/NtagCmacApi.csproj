@@ -7,11 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Ntag424Cmac\**\*.cs" Link="Ntag424Cmac\%(RecursiveDir)%(Filename)%(Extension)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
+    <ProjectReference Include="..\Ntag424Cmac\Ntag424Cmac.csproj" />
   </ItemGroup>
 
 </Project>

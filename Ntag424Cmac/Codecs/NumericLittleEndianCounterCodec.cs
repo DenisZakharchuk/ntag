@@ -1,7 +1,7 @@
 using System;
 using System.Globalization;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Codecs;
 
 /// <summary>
 /// <see cref="ICounterCodec"/> matching the "mishaAlg" reference implementation: the
@@ -11,9 +11,9 @@ namespace Ntag424.Cmac;
 /// decoded directly from written hex-byte order like <see cref="LiteralHexCounterCodec"/>.
 ///
 /// Confirmed correct for at least one real captured tag read, cross-validated against an
-/// independent BouncyCastle-based implementation (see repo memory notes for the specific
-/// vector). Use this when a deployment's <c>ctr</c> values are authored/observed as plain
-/// incrementing numbers rather than raw SV2-ready bytes.
+/// independent BouncyCastle-based implementation (see repo memory notes for the full
+/// investigation). Use this when a deployment's <c>ctr</c> values are authored/observed as
+/// plain incrementing numbers rather than raw SV2-ready bytes.
 /// </summary>
 public sealed class NumericLittleEndianCounterCodec : ICounterCodec
 {

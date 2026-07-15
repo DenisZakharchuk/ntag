@@ -1,4 +1,9 @@
 using Ntag424.Cmac;
+using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Cryptography;
+using Ntag424.Cmac.MessagePolicies;
+using Ntag424.Cmac.SessionVectors;
+using Ntag424.Cmac.Truncation;
 using NtagCmacApi.Orchestration;
 using NtagCmacApi.UrlParsing;
 using Xunit;

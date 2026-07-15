@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.MessagePolicies;
 
 /// <summary>
 /// <see cref="ISdmMacMessagePolicy"/> for NXP AN12196 Table 5
@@ -12,14 +12,11 @@ namespace Ntag424.Cmac;
 /// given, verbatim).
 ///
 /// <para>
-/// <b>Validation status:</b> implemented directly from the documented Table 5 algorithm
-/// structure (message = raw bytes of the mirrored region; everything downstream - CMAC
-/// derivation, truncation - is the same, already RFC 4493-validated primitive used by
-/// <see cref="EmptyCmacMessagePolicy"/>/Table 4). Unlike Table 4 (independently confirmed
-/// against NXP's official AN12196 Table 4 worked example), no official NXP Table 5 test
-/// vector was available to validate this against. It is currently covered only by
-/// self-consistency tests. Treat as unverified against a real tag until confirmed with an
-/// official vector or a known-valid captured read.
+/// <b>Validation status:</b> confirmed correct for at least one real captured tag read
+/// (combined with a little-endian/LSB-first counter encoding - see
+/// <c>Ntag424.Cmac.Codecs.NumericLittleEndianCounterCodec</c>), cross-validated against an
+/// independent BouncyCastle-based implementation. See repo memory notes for the specific
+/// vector and investigation.
 /// </para>
 /// </summary>
 public sealed class MirroredDataCmacMessagePolicy : ISdmMacMessagePolicy

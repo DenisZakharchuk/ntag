@@ -1,6 +1,6 @@
 using System;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.SessionVectors;
 
 /// <summary>
 /// Builds the standard NTAG 424 DNA SDM session vector, SV2, per NXP AN12196:

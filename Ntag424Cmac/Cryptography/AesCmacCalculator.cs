@@ -1,7 +1,7 @@
 using System;
 using System.Security.Cryptography;
 
-namespace Ntag424.Cmac;
+namespace Ntag424.Cmac.Cryptography;
 
 /// <summary>
 /// Standard AES-128 CMAC (RFC 4493 / NIST SP 800-38B) implementation, built directly on
