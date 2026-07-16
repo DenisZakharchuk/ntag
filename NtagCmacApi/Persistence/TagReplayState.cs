@@ -18,9 +18,9 @@ public sealed class TagReplayState
 
     /// <summary>
     /// FK to <see cref="Company.Id"/> - which tenant/organization this tag belongs to.
-    /// Nullable: nothing in the verification pipeline currently determines/assigns a
-    /// company for a tag yet (scaffolded for future multi-tenant use), so existing and
-    /// newly-committed rows are allowed to have no company assigned.
+    /// Required: every accepted verification must resolve to a real, registered company
+    /// (via <see cref="ICompanyLookup"/>) before it can be committed - there is no
+    /// "unassigned" state anymore.
     /// </summary>
     public required int CompanyId { get; set; }
 
@@ -31,7 +31,7 @@ public sealed class TagReplayState
     /// <c>Ntag424.Cmac.MessagePolicies.MirroredDataCmacMessagePolicy</c> for how mirrored
     /// data actually factors into the MAC). Nullable since a Table 4 deployment has none.
     /// </summary>
-    public required string Serial { get; set; }
+    public string? Serial { get; set; }
 
     public long LastAcceptedCounter { get; set; }
 

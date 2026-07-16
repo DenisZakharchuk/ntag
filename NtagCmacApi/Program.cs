@@ -31,8 +31,10 @@ builder.Services.AddDbContext<NtagDbContext>(options =>
 // else that only needs this one entity set) can depend on it - and on IUnitOfWork for
 // committing - instead of the concrete NtagDbContext/DbContext.
 builder.Services.AddScoped(sp => sp.GetRequiredService<NtagDbContext>().TagReplayStates);
+builder.Services.AddScoped(sp => sp.GetRequiredService<NtagDbContext>().Companies);
 builder.Services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<NtagDbContext>());
 builder.Services.AddScoped<IReplayGuard, EfReplayGuard>();
+builder.Services.AddScoped<ICompanyLookup, EfCompanyLookup>();
 
 // --- Master key resolution: network-based lookup service. Never accepted from the caller. ---
 builder.Services.Configure<TagKeyServiceOptions>(builder.Configuration.GetSection(TagKeyServiceOptions.SectionName));
@@ -84,12 +86,14 @@ var app = builder.Build();
 app.MapGet("/", () => "NTAG 424 DNA SDM CMAC verifier is running.");
 
 // Mirrors the query parameters an NTAG 424 DNA tag places in its SDM URL
-// (e.g. ?uid=...&ctr=...&cmac=...). The master key is NEVER accepted from the
-// caller - it is looked up server-side per UID via the network key service.
+// (e.g. ?uid=...&ctr=...&cmac=...), plus the caller-supplied company code. The master
+// key is NEVER accepted from the caller - it is looked up server-side per UID via the
+// network key service.
 //
 // Accepts EITHER the raw scanned URL (request.Url - parsed via ISdmUrlParser, which also
 // derives the AN12196 Table 5 mirrored-data message automatically) OR pre-split
 // uid/counter/cmac/mirroredData fields directly. If Url is supplied it takes precedence.
+// CompanyCode is always supplied separately (it isn't part of the tag's own URL).
 app.MapPost("/api/sdm/verify", async (
     SdmVerifyRequest request,
     ISdmVerificationOrchestrator orchestrator,
@@ -97,8 +101,8 @@ app.MapPost("/api/sdm/verify", async (
     CancellationToken cancellationToken) =>
 {
     SdmVerifyCommand command = !string.IsNullOrWhiteSpace(request.Url)
-        ? urlParser.Parse(request.Url)
-        : new SdmVerifyCommand(request.Uid, request.Counter, request.Cmac, request.MirroredData);
+        ? urlParser.Parse(request.Url) with { CompanyCode = request.CompanyCode }
+        : new SdmVerifyCommand(request.Uid, request.Counter, request.Cmac, request.CompanyCode, request.MirroredData, request.Serial);
 
     SdmVerificationOutcome outcome = await orchestrator.VerifyAsync(command, cancellationToken);
 
@@ -115,8 +119,10 @@ internal record SdmVerifyRequest(
     string Uid = "",
     string Counter = "",
     string Cmac = "",
+    string CompanyCode = "",
     string? MirroredData = null,
-    string? Url = null);
+    string? Url = null,
+    string? Serial = null);
 
 internal record SdmVerifyResponse(bool Valid);
 

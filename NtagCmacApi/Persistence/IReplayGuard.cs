@@ -1,3 +1,6 @@
+using NtagCmacApi.Models;
+using DomainCompany = NtagCmacApi.Models.Company;
+
 namespace NtagCmacApi.Persistence;
 
 /// <summary>
@@ -45,7 +48,16 @@ public enum ReplayCommitResult
 /// </summary>
 public interface IReplayGuard
 {
-    Task<ReplayPreCheckResult> PreCheckAsync(string uidHex, long counter, string cmacHex, CancellationToken cancellationToken);
+    /// <summary>
+    /// Pre-check only looks at counter/CMAC history for the UID - it doesn't need a
+    /// resolved company (that's only required for persisting a new/updated row).
+    /// </summary>
+    Task<ReplayPreCheckResult> PreCheckAsync(NtagSDMData data, CancellationToken cancellationToken);
 
-    Task<ReplayCommitResult> CommitAsync(string uidHex, long counter, string cmacHex, CancellationToken cancellationToken);
+    /// <summary>
+    /// <paramref name="company"/> is required (not nullable): <c>TagReplayState.CompanyId</c>
+    /// is a mandatory FK, so the caller must have already resolved a company (e.g. via
+    /// <see cref="ICompanyLookup"/>) before committing.
+    /// </summary>
+    Task<ReplayCommitResult> CommitAsync(NtagSDMData data, DomainCompany company, CancellationToken cancellationToken);
 }

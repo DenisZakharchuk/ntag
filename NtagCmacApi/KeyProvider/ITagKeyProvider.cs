@@ -1,3 +1,5 @@
+using NtagCmacApi.Models;
+
 namespace NtagCmacApi.KeyProvider;
 
 /// <summary>Outcome of resolving a tag's master key.</summary>
@@ -27,5 +29,5 @@ public readonly record struct TagKeyLookupResult(TagKeyLookupStatus Status, stri
 /// </summary>
 public interface ITagKeyProvider
 {
-    Task<TagKeyLookupResult> GetMasterKeyAsync(string uidHex, CancellationToken cancellationToken);
+    Task<TagKeyLookupResult> GetMasterKeyAsync(NtagSDMData data, CancellationToken cancellationToken);
 }

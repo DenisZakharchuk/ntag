@@ -25,7 +25,7 @@ public sealed class SdmUrlParser : ISdmUrlParser
     {
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
         {
-            return new SdmVerifyCommand(string.Empty, string.Empty, string.Empty, string.Empty);
+            return new SdmVerifyCommand(string.Empty, string.Empty, string.Empty, CompanyCode: string.Empty, MirroredData: string.Empty);
         }
 
         string query = uri.Query.TrimStart('?');
@@ -34,11 +34,19 @@ public sealed class SdmUrlParser : ISdmUrlParser
         string uid = parameters.GetValueOrDefault("uid", string.Empty);
         string counter = parameters.GetValueOrDefault("ctr", string.Empty);
         string cmac = parameters.GetValueOrDefault("mac", string.Empty);
+        string? serial = parameters.GetValueOrDefault("serial");
+        if (string.IsNullOrEmpty(serial))
+        {
+            serial = null;
+        }
 
         int macIndex = query.IndexOf(MacParamPrefix, StringComparison.OrdinalIgnoreCase);
         string mirroredData = macIndex >= 0 ? query[..(macIndex + MacParamPrefix.Length)] : string.Empty;
 
-        return new SdmVerifyCommand(uid, counter, cmac, mirroredData);
+        // CompanyCode is NOT part of the tag's SDM URL - it's supplied separately by the
+        // caller of the verification API. Left empty here; Program.cs fills it in via
+        // `with { CompanyCode = ... }` after parsing.
+        return new SdmVerifyCommand(uid, counter, cmac, CompanyCode: string.Empty, MirroredData: mirroredData, Serial: serial);
     }
 
     private static IReadOnlyDictionary<string, string> ParseQuery(string query)

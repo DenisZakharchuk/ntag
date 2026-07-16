@@ -4,7 +4,7 @@ namespace NtagCmacApi.Orchestration;
 
 /// <summary>
 /// Default <see cref="ISdmVerifyCommandValidationPolicy"/>: requires non-empty UID, counter,
-/// and CMAC fields, and requires the counter to be a valid hexadecimal string.
+/// CMAC, and company code fields, and requires the counter to be a valid hexadecimal string.
 /// </summary>
 public sealed class SdmVerifyCommandValidationPolicy : ISdmVerifyCommandValidationPolicy
 {
@@ -13,6 +13,7 @@ public sealed class SdmVerifyCommandValidationPolicy : ISdmVerifyCommandValidati
         if (string.IsNullOrEmpty(command.Uid) ||
             string.IsNullOrEmpty(command.Counter) ||
             string.IsNullOrEmpty(command.Cmac) ||
+            string.IsNullOrEmpty(command.CompanyCode) ||
             !int.TryParse(command.Counter, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out counterValue))
         {
             counterValue = 0;

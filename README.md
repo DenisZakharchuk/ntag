@@ -205,59 +205,114 @@ Ntag424Cmac/                      SOLID verifier implementation, its own class l
                                                     LSB-first - confirmed correct for a real
                                                     captured tag read (combined with Table 5).
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
+  Models/                         Domain models, namespace `NtagCmacApi.Models` - shared
+                                  across use cases/business logic/infrastructure, decoupled
+                                  from any one transport (HTTP DTOs) or persistence shape.
+    NtagSDMData.cs                `record NtagSDMData(Uid, Serial, Counter, Cmac)` - the
+                                  raw SDM read fields, serial optional.
+    Company.cs                    `record Company(CompanyId, CompanyCode)` - minimal
+                                  tenant reference, resolved (via `ICompanyLookup`) from the
+                                  `CompanyCode` supplied in the verification request.
+                                  Deliberately a DIFFERENT type from
+                                  `Persistence.Company` (the EF entity, which also carries
+                                  Code/Name/audit fields) - both are named `Company` in
+                                  different namespaces; files needing both alias one via
+                                  `using DomainCompany = NtagCmacApi.Models.Company;`.
   Persistence/                    EF Core replay-guard state store.
     TagReplayState.cs             Entity: per-UID last-accepted counter/CMAC, plus a
-                                  nullable `CompanyId` FK (scaffolded for future
-                                  multi-tenant use - no code path assigns one yet).
-    Company.cs                    Minimal tenant/organization reference entity (Id, Code,
-                                  Name, plus CreatedOn/CreatedBy required + ModifiedOn/
-                                  ModifiedBy nullable audit fields); seeded with a few
-                                  records, not yet managed via API.
+                                  REQUIRED `int CompanyId` FK (every accepted verification
+                                  must resolve to a real company) and nullable `Serial`
+                                  (plumbed through from `NtagSDMData` on every commit).
+    Company.cs                    EF entity (Id, Code, Name, CreatedOn/CreatedBy required +
+                                  ModifiedOn/ModifiedBy nullable audit fields); seeded with
+                                  a few records, not yet managed via API. `Id` is `int`.
+    ICompanyLookup.cs /
+    EfCompanyLookup.cs            Resolves a caller-supplied `CompanyCode` to a
+                                  `Models.Company` (with its persisted id), by querying the
+                                  `Companies` table for a matching `Code`. Required because
+                                  `TagReplayState.CompanyId` is mandatory - an unresolvable
+                                  code fails the request (`CompanyUnknown` outcome) before
+                                  any replay/key/CMAC work. Logs a Debug line on a miss
+                                  (not a Warning - the orchestrator already logs that).
     NtagDbContext.cs              DbContext; LastAcceptedCounter is an EF Core
                                   concurrency token (portable across providers, unlike a
                                   SQL-Server-only rowversion column). Configures the
                                   TagReplayState -> Company FK (Restrict on delete) and
                                   seeds Company rows via HasData.
     Migrations/                   EF Core migrations (`dotnet ef migrations add ...`) -
-                                  required once a real DBMS (SqlServer/Npgsql) replaces
-                                  InMemory; apply with `dotnet ef database update`.
+                                  currently EMPTY (deleted pending a model change; not yet
+                                  regenerated - run `dotnet ef migrations add InitialCreate`
+                                  then `dotnet ef database update` before running against
+                                  SqlServer).
     IReplayGuard.cs /
-    EfReplayGuard.cs              Async pre-check (cheap, before network/crypto) + commit
+    EfReplayGuard.cs              Async pre-check (cheap, before network/crypto - takes
+                                  only a `Models.NtagSDMData`, no company needed) + commit
                                   (conditional update, rejects on lost optimistic-
-                                  concurrency race) split — the DB-backed equivalent of the
-                                  old ConcurrentDictionary.TryUpdate CAS loop.
+                                  concurrency race - takes a `Models.NtagSDMData` AND a
+                                  REQUIRED `Models.Company`, since persisting always needs
+                                  a real CompanyId) split — the DB-backed equivalent of the
+                                  old ConcurrentDictionary.TryUpdate CAS loop. A lost
+                                  concurrency race is expected under load, so it's only
+                                  logged at Debug; an unparseable counter (should never
+                                  happen - the validation policy already checked it) is
+                                  logged at Warning since it indicates a real bug.
   KeyProvider/                    Master-key resolution over the network.
     ITagKeyProvider.cs            Found / NotFound / ServiceError result contract.
+                                  `GetMasterKeyAsync` takes a `Models.NtagSDMData` instance.
     TagKeyServiceOptions.cs       Options bound from "Ntag:KeyService" config.
     HttpTagKeyProvider.cs         Typed HttpClient implementation; fails closed (maps all
                                   network/timeout/malformed-response errors to
-                                  ServiceError) rather than throwing.
+                                  ServiceError) rather than throwing. NotFound (a tag simply
+                                  isn't registered) is only logged at Debug - it's a normal
+                                  outcome, not a failure; actual service/network errors are
+                                  logged at Warning.
   Orchestration/                  Composes the pipeline for one verification request.
     SdmVerifyCommand.cs           Plain-string DTO (crosses async boundaries; the crypto
-                                  core's ref struct request cannot).
+                                  core's ref struct request cannot) - REQUIRED
+                                  `CompanyCode` field (like Uid/Counter/Cmac) plus optional
+                                  `MirroredData`/`Serial`.
     SdmVerificationOutcome.cs     Closed-set sealed record hierarchy (MalformedRequest,
-                                  ReplayRejected, TagKeyUnavailable, CmacInvalid,
-                                  ReplayLostRace, DuplicateOfLastAccepted, Accepted) —
-                                  enables exhaustive handling of each failure stage.
+                                  CompanyUnknown, ReplayRejected, TagKeyUnavailable,
+                                  CmacInvalid, ReplayLostRace, DuplicateOfLastAccepted,
+                                  Accepted) — enables exhaustive handling of each failure
+                                  stage. Carries a `Models.NtagSDMData? Data` (not raw
+                                  uid/counter strings). Owns static factory methods
+                                  (`ForCompanyUnknown`, `FromReplayPreCheck`,
+                                  `ForTagKeyUnavailable`, `ForCmacInvalid`,
+                                  `FromReplayCommit`) that map each dependency's raw result
+                                  to the right outcome subtype - this mapping logic lives
+                                  here, not in the orchestrator, to avoid "feature envy"
+                                  (the orchestrator would otherwise need to know every
+                                  outcome subtype's shape just to pick one).
     ISdmVerificationOrchestrator.cs /
     SdmVerificationOrchestrator.cs Sequences replay pre-check -> key lookup -> CMAC verify
-                                  -> replay commit -> outcome notification. A fixed
-                                  pipeline (not itself a Strategy); each step it composes
-                                  is independently swappable via DI.
+                                  -> company resolution -> replay commit -> outcome
+                                  notification. A fixed pipeline (not itself a Strategy);
+                                  each step it composes is independently swappable via DI.
+                                  Resolves `command.CompanyCode` via `ICompanyLookup` right
+                                  before the commit (the only step that needs one) -
+                                  resolving it any earlier would spend a DB lookup on
+                                  requests that end up rejected by the pre-check, key
+                                  lookup, or CMAC verification anyway. An unresolvable code
+                                  short-circuits to `CompanyUnknown` before the commit.
   Notifications/                  Reporting outcomes to an external "master system".
     IOutcomeNotifier.cs           Abstraction; called for every outcome, success or not.
     LoggingOutcomeNotifier.cs     Placeholder implementation — logs instead of calling a
-                                  real system. A failing notifier is swallowed and never
-                                  changes the HTTP response.
+                                  real system. One line per request: Information for a
+                                  successful outcome, Warning for anything else. A failing
+                                  notifier is swallowed and never changes the HTTP response.
   UrlParsing/                     Optional convenience: accept the raw scanned URL.
     ISdmUrlParser.cs /
-    SdmUrlParser.cs               Extracts uid/ctr/mac query params and computes the
+    SdmUrlParser.cs               Extracts uid/ctr/mac/serial query params and computes the
                                   AN12196 Table 5 mirrored-data message automatically
                                   (literal query text up to and including "mac=") so
                                   callers can submit the exact tag-scanned URL instead of
-                                  pre-splitting it themselves. Malformed URLs/missing
-                                  fields yield an empty command, letting the existing
-                                  validation policy classify it as MalformedRequest.
+                                  pre-splitting it themselves. `CompanyCode` is NOT part of
+                                  the tag's URL - the caller always supplies it separately
+                                  (Program.cs merges it in via a record `with` expression).
+                                  Malformed URLs/missing fields yield an empty command,
+                                  letting the existing validation policy classify it as
+                                  MalformedRequest.
 NtagCmacApi.Tests/                xUnit tests (RFC 4493 + official NXP AN12196 vectors,
                                   end-to-end self-consistency checks, EF Core replay-guard
                                   concurrency tests, HTTP key-provider fake-handler tests,
@@ -274,15 +329,24 @@ NtagCmacApi.Tests/                xUnit tests (RFC 4493 + official NXP AN12196 v
 Request body — either discrete fields:
 
 ```json
-{ "uid": "04A1B2C3D4E5F6", "counter": "000001", "cmac": "9130AE6B05189C97" }
+{ "uid": "04A1B2C3D4E5F6", "counter": "000001", "cmac": "9130AE6B05189C97", "companyCode": "ACME" }
 ```
 
 ...or the raw scanned URL directly (parsed via `ISdmUrlParser`, which also derives the
-AN12196 Table 5 mirrored-data message automatically — see below):
+AN12196 Table 5 mirrored-data message automatically — see below). `companyCode` is always
+supplied separately, since it isn't part of the tag's own URL:
 
 ```json
-{ "url": "https://example.com/?serial=11111111&uid=04B43132502390&ctr=000001&mac=E7D76C550FF1755B" }
+{ "url": "https://example.com/?serial=11111111&uid=04B43132502390&ctr=000001&mac=E7D76C550FF1755B", "companyCode": "ACME" }
 ```
+
+`companyCode` is **required** - it's resolved via `ICompanyLookup` (querying the
+`Companies` table by `Code`), right before the replay commit, since
+`TagReplayState.CompanyId` is a mandatory FK and that's the only step that actually needs
+one (resolving any earlier would spend a DB lookup on requests already doomed to fail the
+pre-check, key lookup, or CMAC verification). An unresolvable code yields a
+`CompanyUnknown` outcome (`{ "valid": false }`, no distinguishing detail - same
+oracle-attack-prevention rule as every other failure case).
 
 
 If the tag's SDM configuration is AN12196 Table 5 (`SDMMACInputOffset != SDMMACOffset`,

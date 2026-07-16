@@ -1,5 +1,7 @@
 using System.Net;
+using Microsoft.Extensions.Logging.Abstractions;
 using NtagCmacApi.KeyProvider;
+using NtagCmacApi.Models;
 using Xunit;
 
 namespace NtagCmacApi.Tests;
@@ -40,8 +42,10 @@ public class HttpTagKeyProviderTests
     private static HttpTagKeyProvider CreateProvider(HttpMessageHandler handler)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://key-service.test/") };
-        return new HttpTagKeyProvider(httpClient);
+        return new HttpTagKeyProvider(httpClient, NullLogger<HttpTagKeyProvider>.Instance);
     }
+
+    private static NtagSDMData Data(string uid) => new(uid, null, "000001", "AABBCCDDEEFF0011");
 
     [Fact]
     public async Task GetMasterKeyAsync_200WithKey_ReturnsFound()
@@ -52,7 +56,7 @@ public class HttpTagKeyProviderTests
         });
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.Found, result.Status);
         Assert.Equal("AAAAAAAAAAAAAAAAAAAAAA==", result.MasterKeyBase64);
@@ -64,7 +68,7 @@ public class HttpTagKeyProviderTests
         var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.NotFound, result.Status);
         Assert.Null(result.MasterKeyBase64);
@@ -76,7 +80,7 @@ public class HttpTagKeyProviderTests
         var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.ServiceError, result.Status);
     }
@@ -90,7 +94,7 @@ public class HttpTagKeyProviderTests
         });
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.ServiceError, result.Status);
     }
@@ -101,7 +105,7 @@ public class HttpTagKeyProviderTests
         var handler = new ThrowingHandler(new HttpRequestException("connection refused"));
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.ServiceError, result.Status);
     }
@@ -112,7 +116,7 @@ public class HttpTagKeyProviderTests
         var handler = new ThrowingHandler(new TaskCanceledException("timed out"));
         HttpTagKeyProvider provider = CreateProvider(handler);
 
-        TagKeyLookupResult result = await provider.GetMasterKeyAsync("04A1B2C3D4E5F6", CancellationToken.None);
+        TagKeyLookupResult result = await provider.GetMasterKeyAsync(Data("04A1B2C3D4E5F6"), CancellationToken.None);
 
         Assert.Equal(TagKeyLookupStatus.ServiceError, result.Status);
     }

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Extensions.Logging;
+using NtagCmacApi.Models;
 
 namespace NtagCmacApi.KeyProvider;
 
@@ -23,33 +25,38 @@ internal sealed record TagKeyLookupResponse(string MasterKeyBase64);
 public sealed class HttpTagKeyProvider : ITagKeyProvider
 {
     private readonly HttpClient _httpClient;
+    private readonly ILogger<HttpTagKeyProvider> _logger;
 
-    public HttpTagKeyProvider(HttpClient httpClient)
+    public HttpTagKeyProvider(HttpClient httpClient, ILogger<HttpTagKeyProvider> logger)
     {
         _httpClient = httpClient;
+        _logger = logger;
     }
 
-    public async Task<TagKeyLookupResult> GetMasterKeyAsync(string uidHex, CancellationToken cancellationToken)
+    public async Task<TagKeyLookupResult> GetMasterKeyAsync(NtagSDMData data, CancellationToken cancellationToken)
     {
         try
         {
             using HttpResponseMessage response = await _httpClient.GetAsync(
-                $"tags/{Uri.EscapeDataString(uidHex.ToUpperInvariant())}/key",
+                $"tags/{Uri.EscapeDataString(data.Uid.ToUpperInvariant())}/key",
                 cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
+                _logger.LogDebug("Master key not found for uid={Uid}", data.Uid);
                 return TagKeyLookupResult.NotFound;
             }
 
             if (!response.IsSuccessStatusCode)
             {
+                _logger.LogWarning("Master key service returned {StatusCode} for uid={Uid}", (int)response.StatusCode, data.Uid);
                 return TagKeyLookupResult.ServiceError;
             }
 
             TagKeyLookupResponse? body = await response.Content.ReadFromJsonAsync<TagKeyLookupResponse>(cancellationToken);
             if (body is null || string.IsNullOrEmpty(body.MasterKeyBase64))
             {
+                _logger.LogWarning("Master key service returned an empty/malformed response for uid={Uid}", data.Uid);
                 return TagKeyLookupResult.ServiceError;
             }
 
@@ -59,6 +66,7 @@ public sealed class HttpTagKeyProvider : ITagKeyProvider
         {
             // Network failure, timeout, DNS/TLS error, or an unexpected/malformed response
             // body - fail closed rather than propagate.
+            _logger.LogWarning(ex, "Master key lookup failed for uid={Uid}", data.Uid);
             return TagKeyLookupResult.ServiceError;
         }
     }

@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using NtagCmacApi.Models;
 using NtagCmacApi.Persistence;
 using Xunit;
+using DomainCompany = NtagCmacApi.Models.Company;
 
 namespace NtagCmacApi.Tests;
 
@@ -21,13 +24,21 @@ public class EfReplayGuardTests
         return new NtagDbContext(options);
     }
 
+    private static NtagSDMData Data(string uid, long counter, string cmac, string? serial = null) =>
+        new(uid, serial, counter.ToString(), cmac);
+
+    private static readonly DomainCompany DefaultCompany = new(1, "ACME");
+
+    private static EfReplayGuard CreateGuard(NtagDbContext db) =>
+        new(db.TagReplayStates, db, NullLogger<EfReplayGuard>.Instance);
+
     [Fact]
     public async Task PreCheck_NoStoredState_ReturnsProceed()
     {
         await using NtagDbContext db = CreateContext(nameof(PreCheck_NoStoredState_ReturnsProceed));
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayPreCheckResult result = await guard.PreCheckAsync("04A1B2C3D4E5F6", 1, "AABBCCDDEEFF0011", CancellationToken.None);
+        ReplayPreCheckResult result = await guard.PreCheckAsync(Data("04A1B2C3D4E5F6", 1, "AABBCCDDEEFF0011"), CancellationToken.None);
 
         Assert.Equal(ReplayPreCheckResult.Proceed, result);
     }
@@ -38,14 +49,14 @@ public class EfReplayGuardTests
         string dbName = nameof(PreCheck_NewerCounter_ReturnsProceed);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayPreCheckResult result = await guard.PreCheckAsync("uid1", 6, "NEWCMAC", CancellationToken.None);
+        ReplayPreCheckResult result = await guard.PreCheckAsync(Data("uid1", 6, "NEWCMAC"), CancellationToken.None);
 
         Assert.Equal(ReplayPreCheckResult.Proceed, result);
     }
@@ -56,14 +67,14 @@ public class EfReplayGuardTests
         string dbName = nameof(PreCheck_StaleCounter_ReturnsRejected);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 4, "SOMEOTHERCMAC", CancellationToken.None);
+        ReplayPreCheckResult result = await guard.PreCheckAsync(Data("UID1", 4, "SOMEOTHERCMAC"), CancellationToken.None);
 
         Assert.Equal(ReplayPreCheckResult.Rejected, result);
     }
@@ -74,14 +85,14 @@ public class EfReplayGuardTests
         string dbName = nameof(PreCheck_ExactRepeatOfLastAccepted_ReturnsDuplicate);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "MATCHINGCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "MATCHINGCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 5, "matchingcmac", CancellationToken.None);
+        ReplayPreCheckResult result = await guard.PreCheckAsync(Data("UID1", 5, "matchingcmac"), CancellationToken.None);
 
         Assert.Equal(ReplayPreCheckResult.Duplicate, result);
     }
@@ -92,14 +103,14 @@ public class EfReplayGuardTests
         string dbName = nameof(PreCheck_SameCounterDifferentCmac_ReturnsRejected);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "MATCHINGCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "MATCHINGCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayPreCheckResult result = await guard.PreCheckAsync("UID1", 5, "DIFFERENTCMAC", CancellationToken.None);
+        ReplayPreCheckResult result = await guard.PreCheckAsync(Data("UID1", 5, "DIFFERENTCMAC"), CancellationToken.None);
 
         Assert.Equal(ReplayPreCheckResult.Rejected, result);
     }
@@ -108,9 +119,9 @@ public class EfReplayGuardTests
     public async Task Commit_NewUid_InsertsRowAndReturnsAccepted()
     {
         await using NtagDbContext db = CreateContext(nameof(Commit_NewUid_InsertsRowAndReturnsAccepted));
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayCommitResult result = await guard.CommitAsync("UID1", 1, "CMAC1", CancellationToken.None);
+        ReplayCommitResult result = await guard.CommitAsync(Data("UID1", 1, "CMAC1"), DefaultCompany, CancellationToken.None);
 
         Assert.Equal(ReplayCommitResult.Accepted, result);
         TagReplayState? stored = await db.TagReplayStates.FindAsync("UID1");
@@ -120,19 +131,34 @@ public class EfReplayGuardTests
     }
 
     [Fact]
+    public async Task Commit_NewUid_WithCompanyAndSerial_PersistsBoth()
+    {
+        await using NtagDbContext db = CreateContext(nameof(Commit_NewUid_WithCompanyAndSerial_PersistsBoth));
+        var guard = CreateGuard(db);
+
+        ReplayCommitResult result = await guard.CommitAsync(
+            Data("UID1", 1, "CMAC1", serial: "11111111"), new DomainCompany(1, "ACME"), CancellationToken.None);
+
+        Assert.Equal(ReplayCommitResult.Accepted, result);
+        TagReplayState? stored = await db.TagReplayStates.FindAsync("UID1");
+        Assert.Equal(1, stored!.CompanyId);
+        Assert.Equal("11111111", stored.Serial);
+    }
+
+    [Fact]
     public async Task Commit_NewerCounterThanStored_UpdatesAndReturnsAccepted()
     {
         string dbName = nameof(Commit_NewerCounterThanStored_UpdatesAndReturnsAccepted);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayCommitResult result = await guard.CommitAsync("UID1", 6, "NEWCMAC", CancellationToken.None);
+        ReplayCommitResult result = await guard.CommitAsync(Data("UID1", 6, "NEWCMAC"), DefaultCompany, CancellationToken.None);
 
         Assert.Equal(ReplayCommitResult.Accepted, result);
         TagReplayState? stored = await db.TagReplayStates.FindAsync("UID1");
@@ -145,14 +171,14 @@ public class EfReplayGuardTests
         string dbName = nameof(Commit_StaleCounter_ReturnsRejected);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext db = CreateContext(dbName);
-        var guard = new EfReplayGuard(db.TagReplayStates, db);
+        var guard = CreateGuard(db);
 
-        ReplayCommitResult result = await guard.CommitAsync("UID1", 5, "NEWCMAC", CancellationToken.None);
+        ReplayCommitResult result = await guard.CommitAsync(Data("UID1", 5, "NEWCMAC"), DefaultCompany, CancellationToken.None);
 
         Assert.Equal(ReplayCommitResult.Rejected, result);
     }
@@ -171,21 +197,21 @@ public class EfReplayGuardTests
         string dbName = nameof(Commit_ConcurrentRequestsForSameUid_OnlyOneWins);
         await using (NtagDbContext seed = CreateContext(dbName))
         {
-            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
+            seed.TagReplayStates.Add(new TagReplayState { Uid = "UID1", CompanyId = 1, LastAcceptedCounter = 5, LastAcceptedCmacHex = "OLDCMAC", LastAcceptedAtUtc = DateTimeOffset.UtcNow });
             await seed.SaveChangesAsync();
         }
 
         await using NtagDbContext dbA = CreateContext(dbName);
         await using NtagDbContext dbB = CreateContext(dbName);
-        var guardA = new EfReplayGuard(dbA.TagReplayStates, dbA);
-        var guardB = new EfReplayGuard(dbB.TagReplayStates, dbB);
+        var guardA = CreateGuard(dbA);
+        var guardB = CreateGuard(dbB);
 
         // Both "requests" read the same pre-race state via their own pre-check first.
-        await guardA.PreCheckAsync("UID1", 6, "CMAC_A", CancellationToken.None);
-        await guardB.PreCheckAsync("UID1", 6, "CMAC_B", CancellationToken.None);
+        await guardA.PreCheckAsync(Data("UID1", 6, "CMAC_A"), CancellationToken.None);
+        await guardB.PreCheckAsync(Data("UID1", 6, "CMAC_B"), CancellationToken.None);
 
-        ReplayCommitResult resultA = await guardA.CommitAsync("UID1", 6, "CMAC_A", CancellationToken.None);
-        ReplayCommitResult resultB = await guardB.CommitAsync("UID1", 6, "CMAC_B", CancellationToken.None);
+        ReplayCommitResult resultA = await guardA.CommitAsync(Data("UID1", 6, "CMAC_A"), DefaultCompany, CancellationToken.None);
+        ReplayCommitResult resultB = await guardB.CommitAsync(Data("UID1", 6, "CMAC_B"), DefaultCompany, CancellationToken.None);
 
         var results = new[] { resultA, resultB };
         Assert.Single(results, r => r == ReplayCommitResult.Accepted);

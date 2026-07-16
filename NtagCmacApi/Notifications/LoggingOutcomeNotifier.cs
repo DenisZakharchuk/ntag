@@ -19,11 +19,24 @@ public sealed class LoggingOutcomeNotifier : IOutcomeNotifier
 
     public Task NotifyAsync(SdmVerificationOutcome outcome, CancellationToken cancellationToken)
     {
-        _logger.LogInformation(
-            "SDM verification outcome {OutcomeType} for uid={Uid} counter={Counter}",
-            outcome.GetType().Name,
-            outcome.UidHex ?? "(none)",
-            outcome.CounterHex ?? "(none)");
+        // Single log line per request, split by severity so failures/anomalies stand out
+        // from routine successful verifications without adding any extra log volume.
+        if (outcome.IsSuccess)
+        {
+            _logger.LogInformation(
+                "SDM verification outcome {OutcomeType} for uid={Uid} counter={Counter}",
+                outcome.GetType().Name,
+                outcome.Data?.Uid ?? "(none)",
+                outcome.Data?.Counter ?? "(none)");
+        }
+        else
+        {
+            _logger.LogWarning(
+                "SDM verification outcome {OutcomeType} for uid={Uid} counter={Counter}",
+                outcome.GetType().Name,
+                outcome.Data?.Uid ?? "(none)",
+                outcome.Data?.Counter ?? "(none)");
+        }
 
         return Task.CompletedTask;
     }
