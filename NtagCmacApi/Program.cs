@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Ntag424.Cmac;
+using NtagCmacApi;
 using NtagCmacApi.KeyProvider;
 using NtagCmacApi.Notifications;
 using NtagCmacApi.Orchestration;
@@ -40,7 +42,7 @@ builder.Services.AddScoped<ICompanyLookup, EfCompanyLookup>();
 builder.Services.Configure<TagKeyServiceOptions>(builder.Configuration.GetSection(TagKeyServiceOptions.SectionName));
 builder.Services.AddHttpClient<ITagKeyProvider, HttpTagKeyProvider>((serviceProvider, httpClient) =>
 {
-    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<TagKeyServiceOptions>>().Value;
+    var options = serviceProvider.GetRequiredService<IOptions<TagKeyServiceOptions>>().Value;
     if (!string.IsNullOrEmpty(options.BaseUrl))
     {
         httpClient.BaseAddress = new Uri(options.BaseUrl);
@@ -59,18 +61,24 @@ builder.Services.AddSingleton<IOutcomeNotifier, LoggingOutcomeNotifier>();
 // MacMessagePolicy defaults to EmptyMessage (AN12196 Table 4); CounterCodec defaults to
 // LiteralHex (matches NXP's official vector). NumericLittleEndian is confirmed correct
 // for at least one real captured tag read - see ICounterCodec remarks.
-builder.Services.AddCmac(options =>
-{
-    if (Enum.TryParse(builder.Configuration["Ntag:MacMessagePolicy:Type"], ignoreCase: true, out MacMessagePolicyKind macMessagePolicy))
-    {
-        options.MacMessagePolicy = macMessagePolicy;
-    }
+//
+// The "Ntag:MacMessagePolicy:Type"/"Ntag:CounterCodec:Type" values are bound through the
+// standard Options pipeline (MacMessagePolicySettings/CounterCodecSettings, each an
+// IOptionsMonitor<T>) rather than read directly off IConfiguration - this gives automatic,
+// case-insensitive enum parsing (no manual Enum.TryParse) and picks up config reloads
+// (e.g. appsettings.json edited at runtime) instead of only ever reflecting the value
+// present at process startup.
+builder.Services.Configure<MacMessagePolicySettings>(builder.Configuration.GetSection(MacMessagePolicySettings.SectionName));
+builder.Services.Configure<CounterCodecSettings>(builder.Configuration.GetSection(CounterCodecSettings.SectionName));
 
-    if (Enum.TryParse(builder.Configuration["Ntag:CounterCodec:Type"], ignoreCase: true, out CounterCodecKind counterCodec))
-    {
-        options.CounterCodec = counterCodec;
-    }
-});
+builder.Services.AddCmac();
+builder.Services.AddOptions<CmacOptions>()
+    .Configure<IOptionsMonitor<MacMessagePolicySettings>, IOptionsMonitor<CounterCodecSettings>>(
+        (options, macMessagePolicySettings, counterCodecSettings) =>
+        {
+            options.MacMessagePolicy = macMessagePolicySettings.CurrentValue.Type;
+            options.CounterCodec = counterCodecSettings.CurrentValue.Type;
+        });
 
 // --- Orchestrator: sequences request validation -> replay pre-check -> key lookup ->
 // CMAC verify -> replay commit -> outcome notification. ---

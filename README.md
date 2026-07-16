@@ -173,7 +173,22 @@ Ntag424Cmac/                      SOLID verifier implementation, its own class l
                                   helper (options-delegate pattern, matching ASP.NET Core's
                                   own composition-root APIs, e.g. `AddDbContext<T>(options =>
                                   ...)`); selects Table 4 vs Table 5 message policy and
-                                  counter byte-order convention via `CmacOptions`.
+                                  counter byte-order convention via `CmacOptions`. Routes
+                                  `CmacOptions` through the standard Options pipeline
+                                  (`services.AddOptions<CmacOptions>().Configure(configure)`)
+                                  rather than evaluating it eagerly, so
+                                  `ISdmMacMessagePolicy`/`ICounterCodec` resolve it via
+                                  `IOptionsMonitor<CmacOptions>` at construction time - this
+                                  lets a host app layer additional `IOptionsMonitor`-driven
+                                  configuration on top after calling `AddCmac()` (see
+                                  `NtagCmacApi/Program.cs`). Every service is registered
+                                  Transient (not Singleton): `Ntag424CmacVerifier` holds its
+                                  policies as constructor fields for its own lifetime, so a
+                                  Singleton graph would permanently capture whichever
+                                  `CmacOptions` values were current at first resolution -
+                                  Transient rebuilds the (cheap, stateless) graph on every
+                                  resolution instead, so it always reflects the current
+                                  `IOptionsMonitor<CmacOptions>.CurrentValue`.
   CmacOptions.cs                  `MacMessagePolicyKind`/`CounterCodecKind` enums + the
                                   `CmacOptions` POCO configured by the delegate above.
   Cryptography/                   namespace `Ntag424.Cmac.Cryptography`
@@ -205,6 +220,14 @@ Ntag424Cmac/                      SOLID verifier implementation, its own class l
                                                     LSB-first - confirmed correct for a real
                                                     captured tag read (combined with Table 5).
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
+  CmacSettings.cs                 `MacMessagePolicySettings`/`CounterCodecSettings` - thin
+                                  app-level POCOs bound from the "Ntag:MacMessagePolicy"/
+                                  "Ntag:CounterCodec" config sections (each mirroring that
+                                  section's "Type" sub-key) via `services.Configure<T>()`.
+                                  Kept separate from Ntag424Cmac's own `CmacOptions` so
+                                  config binding stays decoupled from the library's own
+                                  composition-root shape; Program.cs maps their resolved
+                                  `IOptionsMonitor<T>.CurrentValue.Type` into `CmacOptions`.
   Models/                         Domain models, namespace `NtagCmacApi.Models` - shared
                                   across use cases/business logic/infrastructure, decoupled
                                   from any one transport (HTTP DTOs) or persistence shape.

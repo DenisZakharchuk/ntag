@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Ntag424.Cmac.Codecs;
 using Ntag424.Cmac.Cryptography;
 using Ntag424.Cmac.MessagePolicies;
@@ -20,31 +21,46 @@ public static class ServiceCollectionExtensions
     /// Configures <see cref="CmacOptions"/> - which <see cref="ISdmMacMessagePolicy"/>
     /// (AN12196 Table 4 vs. Table 5) and which <see cref="ICounterCodec"/> (literal hex
     /// bytes vs. numeric little-endian) to register. Defaults to the settings that match
-    /// NXP's official AN12196 Table 4 worked example if left unconfigured.
+    /// NXP's official AN12196 Table 4 worked example if left unconfigured. Applied through
+    /// the standard <see cref="OptionsBuilder{TOptions}"/> pipeline (not invoked eagerly),
+    /// so callers can layer additional <c>IOptionsMonitor</c>-driven configuration on top
+    /// via <c>services.AddOptions&lt;CmacOptions&gt;().Configure(...)</c> after calling
+    /// this method.
     /// </param>
     public static IServiceCollection AddCmac(
         this IServiceCollection services,
         Action<CmacOptions>? configure = null)
     {
-        var options = new CmacOptions();
-        configure?.Invoke(options);
+        OptionsBuilder<CmacOptions> optionsBuilder = services.AddOptions<CmacOptions>();
+        if (configure is not null)
+        {
+            optionsBuilder.Configure(configure);
+        }
 
-        services.AddSingleton<IAesCmacCalculator, AesCmacCalculator>();
-        services.AddSingleton<ISdmSessionVectorBuilder, Sv2SessionVectorBuilder>();
-        services.AddSingleton<ISdmMacMessagePolicy>(_ => options.MacMessagePolicy switch
+        services.AddTransient<IAesCmacCalculator, AesCmacCalculator>();
+        services.AddTransient<ISdmSessionVectorBuilder, Sv2SessionVectorBuilder>();
+        services.AddTransient<ISdmMacMessagePolicy>(sp =>
         {
-            MacMessagePolicyKind.MirroredData => new MirroredDataCmacMessagePolicy(),
-            _ => new EmptyCmacMessagePolicy(),
+            CmacOptions options = sp.GetRequiredService<IOptionsMonitor<CmacOptions>>().CurrentValue;
+            return options.MacMessagePolicy switch
+            {
+                MacMessagePolicyKind.MirroredData => new MirroredDataCmacMessagePolicy(),
+                _ => new EmptyCmacMessagePolicy(),
+            };
         });
-        services.AddSingleton<ISdmMacTruncationPolicy, OddByteOffsetTruncationPolicy>();
-        services.AddSingleton<IMasterKeyCodec, Base64MasterKeyCodec>();
-        services.AddSingleton<IUidCodec, HexUidCodec>();
-        services.AddSingleton<ICounterCodec>(_ => options.CounterCodec switch
+        services.AddTransient<ISdmMacTruncationPolicy, OddByteOffsetTruncationPolicy>();
+        services.AddTransient<IMasterKeyCodec, Base64MasterKeyCodec>();
+        services.AddTransient<IUidCodec, HexUidCodec>();
+        services.AddTransient<ICounterCodec>(sp =>
         {
-            CounterCodecKind.NumericLittleEndian => new NumericLittleEndianCounterCodec(),
-            _ => new LiteralHexCounterCodec(),
+            CmacOptions options = sp.GetRequiredService<IOptionsMonitor<CmacOptions>>().CurrentValue;
+            return options.CounterCodec switch
+            {
+                CounterCodecKind.NumericLittleEndian => new NumericLittleEndianCounterCodec(),
+                _ => new LiteralHexCounterCodec(),
+            };
         });
-        services.AddSingleton<INtag424CmacVerifier, Ntag424CmacVerifier>();
+        services.AddTransient<INtag424CmacVerifier, Ntag424CmacVerifier>();
 
         return services;
     }
