@@ -1,5 +1,6 @@
 using Ntag424.Cmac;
 using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Comparison;
 using Ntag424.Cmac.Cryptography;
 using Ntag424.Cmac.MessagePolicies;
 using Ntag424.Cmac.SessionVectors;
@@ -31,7 +32,8 @@ public class RealWorldUrlParsingEndToEndTests
         new OddByteOffsetTruncationPolicy(),
         new Base64MasterKeyCodec(),
         new HexUidCodec(),
-        new NumericLittleEndianCounterCodec());
+        new NumericLittleEndianCounterCodec(),
+        new FixedTimeMacEqualityComparer());
 
     [Fact]
     public void ParseRawUrl_ThenVerify_ReturnsTrue()

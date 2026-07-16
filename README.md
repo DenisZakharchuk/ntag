@@ -193,7 +193,22 @@ Ntag424Cmac/                      SOLID verifier implementation, its own class l
                                   `CmacOptions` POCO configured by the delegate above.
   Cryptography/                   namespace `Ntag424.Cmac.Cryptography`
     IAesCmacCalculator.cs /
-    AesCmacCalculator.cs          RFC 4493 AES-CMAC primitive.
+    AesCmacCalculator.cs          RFC 4493 AES-CMAC primitive. Caches a single BCL `Aes`
+                                  instance for its own lifetime rather than calling
+                                  `Aes.Create()` per `ComputeCmac()` call - on Windows,
+                                  `Aes.Create()` wraps CNG (BCrypt), and opening a new
+                                  algorithm/key handle per call was a measurable native-side
+                                  cost invisible to managed-heap allocation metrics (see the
+                                  benchmarks project below). The `Aes` instance is created
+                                  LAZILY (on first `ComputeCmac()` call, not in the
+                                  constructor) since this type is resolved via DI on EVERY
+                                  verification request as part of the whole CMAC dependency
+                                  graph, but the pipeline has several earlier short-circuit
+                                  exit points (validation, company lookup, replay pre-check,
+                                  key lookup) before CMAC verification is ever reached - a
+                                  rejected request shouldn't pay for opening a native AES
+                                  handle it will never use. Implements `IDisposable`
+                                  (`Dispose()` is a safe no-op if never actually used).
   SessionVectors/                 namespace `Ntag424.Cmac.SessionVectors`
     ISdmSessionVectorBuilder.cs /
     Sv2SessionVectorBuilder.cs    SV2 construction policy.
@@ -219,6 +234,14 @@ Ntag424Cmac/                      SOLID verifier implementation, its own class l
                                                     ctr as a number, re-encodes little-endian/
                                                     LSB-first - confirmed correct for a real
                                                     captured tag read (combined with Table 5).
+  Comparison/                      namespace `Ntag424.Cmac.Comparison`
+    IMacEqualityComparer.cs /
+    FixedTimeMacEqualityComparer.cs Production default - wraps
+                                  `CryptographicOperations.FixedTimeEquals` (constant-time,
+                                  avoids a timing side-channel when comparing a received
+                                  CMAC against the locally computed one).
+    PlainMacEqualityComparer.cs   `ReadOnlySpan<byte>.SequenceEqual` - NOT constant-time.
+                                  Benchmark/test use only; never registered by `AddCmac`.
 NtagCmacApi/                      ASP.NET Core minimal API (.NET 10).
   CmacSettings.cs                 `MacMessagePolicySettings`/`CounterCodecSettings` - thin
                                   app-level POCOs bound from the "Ntag:MacMessagePolicy"/
@@ -343,6 +366,55 @@ NtagCmacApi.Tests/                xUnit tests (RFC 4493 + official NXP AN12196 v
                                   codec unit tests, a CONFIRMED real-captured-tag-read
                                   regression test, and raw-URL-parsing end-to-end tests) —
                                   all exercise the abstractions above directly.
+mishaAlg/                         Standalone historical reference implementation
+                                  (BouncyCastle, byte[]-allocating, no policy abstractions) -
+                                  the original baseline this project's Span/stackalloc-based
+                                  `Ntag424CmacVerifier` was rewritten from. `MishaAlg.Verify(url,
+                                  key)` parses a raw scanned URL end-to-end;
+                                  `MishaAlg.VerifyCore(uid, counterLsb, macInputAscii, key,
+                                  expectedMacHex)` is the same CMAC computation with URL
+                                  parsing factored out, so it can be benchmarked against
+                                  `Ntag424CmacVerifier.Verify` on equal footing (see below).
+Ntag424Cmac.Benchmarks/            BenchmarkDotNet console project comparing mishaAlg
+                                  (byte[]-allocating) against `Ntag424CmacVerifier`
+                                  (Span/stackalloc-based) for speed, allocations, and GC
+                                  generation counts (`[MemoryDiagnoser]`).
+  CmacTestVector.cs / CmacTestVectors.cs  A confirmed CMAC sample (currently one - the
+                                  real-world Table 5/NumericLittleEndian vector also used in
+                                  `RealWorldTable5NumericCounterVerificationTests`), exposed
+                                  via `CmacTestVectors.All`. Add more vectors here as they're
+                                  confirmed; `[ParamsSource]` picks up every entry
+                                  automatically, no other code changes needed.
+  CmacVerificationBenchmarks.cs   Three `[Benchmark]` methods per vector:
+                                  `MishaAlg_Verify_NaturalUrl` (baseline, includes URL
+                                  parsing), `MishaAlg_VerifyCore_Normalized` (URL parsing
+                                  excluded - fair pairing with the next one), and
+                                  `Ntag424CmacVerifier_Verify` (wired with
+                                  `PlainMacEqualityComparer`, not the constant-time
+                                  production default, so its deliberately-constant cost
+                                  doesn't skew the CMAC-computation comparison). Run via
+                                  `dotnet run -c Release` (BenchmarkDotNet requires Release).
+  AesPrimitiveBenchmarks.cs       Diagnostic micro-benchmark that isolated WHY
+                                  `Ntag424CmacVerifier_Verify` was initially slower than
+                                  mishaAlg despite allocating far less: repeated
+                                  `Aes.Create()` calls (fixed in `AesCmacCalculator`, see
+                                  above), not BouncyCastle's AES being inherently faster.
+                                  Also documents the REMAINING gap: RFC 4493's own 2x
+                                  subkey-derivation cost across `Verify()`'s two
+                                  differently-keyed `ComputeCmac` calls - a genuine
+                                  structural difference in work done, not a further bug.
+  AvalancheGcBenchmarks.cs        Simulates a burst of back-to-back verification requests
+                                  (`[Params(1_000, 10_000, 100_000)]`) instead of a single
+                                  isolated call, to see CUMULATIVE GC behavior (total
+                                  time/bytes for the whole burst, Gen0/Gen1/Gen2 collections
+                                  per burst) - not just a per-call allocation figure. At
+                                  100,000 requests: mishaAlg's array-based core allocates
+                                  ~318 MB total (~69 Gen0 + ~0.33 Gen1 collections per
+                                  burst) vs. `Ntag424CmacVerifier`'s ~82 MB (~17 Gen0, 0 Gen1
+                                  observed) - ~4x fewer Gen0 pauses and no Gen1 promotions at
+                                  all for the Span-based implementation, at the cost of
+                                  being ~2x slower in wall-clock time (consistent with the
+                                  structural gap `AesPrimitiveBenchmarks.cs` explains).
 ```
 
 ## 6. The web API
@@ -461,6 +533,14 @@ dotnet run
 
 cd ../NtagCmacApi.Tests
 dotnet test
+```
+
+Speed/memory/GC comparison of the byte[]-allocating vs. Span-based CMAC implementations
+(BenchmarkDotNet requires a Release build):
+
+```powershell
+cd Ntag424Cmac.Benchmarks
+dotnet run -c Release
 ```
 
 ## 8. Validation status

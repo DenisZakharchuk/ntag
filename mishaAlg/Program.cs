@@ -33,15 +33,24 @@ namespace MacCounter
                 (byte)((ctr >> 8) & 0xFF),
                 (byte)((ctr >> 16) & 0xFF)
             };
-            byte[] sv2 = BuildSv2(uid, ctrLsb);
-            byte[] kSecMac = ComputeCmac(sdmFileReadKey, sv2);
-            byte[] cmac = ComputeCmac(kSecMac, Encoding.ASCII.GetBytes(macInput));
+
+            return VerifyCore(uid, ctrLsb, macInput, sdmFileReadKey, macHex);
+        }
+
+        /// <summary>
+        /// The actual CMAC verification steps, factored out of <see cref="Verify"/> so
+        /// callers that have already parsed a UID/counter/MAC-input/expected-MAC (e.g. a
+        /// benchmark comparing this against a Span-based implementation) can invoke it
+        /// directly, without also paying for URL/query-string parsing.
+        /// </summary>
+        public static bool VerifyCore(byte[] uid, byte[] counterLsb, string macInputAscii, byte[] key, string expectedMacHex)
+        {
+            byte[] sv2 = BuildSv2(uid, counterLsb);
+            byte[] kSecMac = ComputeCmac(key, sv2);
+            byte[] cmac = ComputeCmac(kSecMac, Encoding.ASCII.GetBytes(macInputAscii));
             byte[] mac = TruncateCmac(cmac);
 
-            byte[] fullCmac = ComputeCmac(sdmFileReadKey, sv2);
-            byte[] truncatedCmac = TruncateCmac(fullCmac);
-            
-            return Convert.ToHexString(mac).Equals(macHex, StringComparison.OrdinalIgnoreCase);
+            return Convert.ToHexString(mac).Equals(expectedMacHex, StringComparison.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, string> ParseQuery(string query)

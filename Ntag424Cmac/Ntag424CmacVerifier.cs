@@ -1,8 +1,8 @@
 using System;
 using System.Buffers;
-using System.Security.Cryptography;
 using System.Text;
 using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Comparison;
 using Ntag424.Cmac.Cryptography;
 using Ntag424.Cmac.MessagePolicies;
 using Ntag424.Cmac.SessionVectors;
@@ -32,6 +32,7 @@ public sealed class Ntag424CmacVerifier : INtag424CmacVerifier
     private readonly IMasterKeyCodec _masterKeyCodec;
     private readonly IUidCodec _uidCodec;
     private readonly ICounterCodec _counterCodec;
+    private readonly IMacEqualityComparer _macEqualityComparer;
 
     public Ntag424CmacVerifier(
         IAesCmacCalculator cmacCalculator,
@@ -40,7 +41,8 @@ public sealed class Ntag424CmacVerifier : INtag424CmacVerifier
         ISdmMacTruncationPolicy truncationPolicy,
         IMasterKeyCodec masterKeyCodec,
         IUidCodec uidCodec,
-        ICounterCodec counterCodec)
+        ICounterCodec counterCodec,
+        IMacEqualityComparer macEqualityComparer)
     {
         _cmacCalculator = cmacCalculator ?? throw new ArgumentNullException(nameof(cmacCalculator));
         _sessionVectorBuilder = sessionVectorBuilder ?? throw new ArgumentNullException(nameof(sessionVectorBuilder));
@@ -49,6 +51,7 @@ public sealed class Ntag424CmacVerifier : INtag424CmacVerifier
         _masterKeyCodec = masterKeyCodec ?? throw new ArgumentNullException(nameof(masterKeyCodec));
         _uidCodec = uidCodec ?? throw new ArgumentNullException(nameof(uidCodec));
         _counterCodec = counterCodec ?? throw new ArgumentNullException(nameof(counterCodec));
+        _macEqualityComparer = macEqualityComparer ?? throw new ArgumentNullException(nameof(macEqualityComparer));
     }
 
     /// <summary>
@@ -63,7 +66,8 @@ public sealed class Ntag424CmacVerifier : INtag424CmacVerifier
         new OddByteOffsetTruncationPolicy(),
         new Base64MasterKeyCodec(),
         new HexUidCodec(),
-        new LiteralHexCounterCodec());
+        new LiteralHexCounterCodec(),
+        new FixedTimeMacEqualityComparer());
 
     public bool Verify(in Ntag424SdmCmacRequest request)
     {
@@ -127,6 +131,6 @@ public sealed class Ntag424CmacVerifier : INtag424CmacVerifier
         Span<byte> truncatedCmac = truncatedCmacBuffer.Slice(0, truncatedLength);
         _truncationPolicy.Truncate(fullCmac, truncatedCmac);
 
-        return CryptographicOperations.FixedTimeEquals(truncatedCmac, receivedCmac);
+        return _macEqualityComparer.AreEqual(truncatedCmac, receivedCmac);
     }
 }

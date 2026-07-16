@@ -2,6 +2,7 @@ using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Comparison;
 using Ntag424.Cmac.Cryptography;
 using Ntag424.Cmac.MessagePolicies;
 using Ntag424.Cmac.SessionVectors;
@@ -51,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddTransient<ISdmMacTruncationPolicy, OddByteOffsetTruncationPolicy>();
         services.AddTransient<IMasterKeyCodec, Base64MasterKeyCodec>();
         services.AddTransient<IUidCodec, HexUidCodec>();
+        services.AddTransient<IMacEqualityComparer, FixedTimeMacEqualityComparer>();
         services.AddTransient<ICounterCodec>(sp =>
         {
             CmacOptions options = sp.GetRequiredService<IOptionsMonitor<CmacOptions>>().CurrentValue;

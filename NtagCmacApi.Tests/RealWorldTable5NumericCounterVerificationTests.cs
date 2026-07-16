@@ -1,5 +1,6 @@
 using Ntag424.Cmac;
 using Ntag424.Cmac.Codecs;
+using Ntag424.Cmac.Comparison;
 using Ntag424.Cmac.Cryptography;
 using Ntag424.Cmac.MessagePolicies;
 using Ntag424.Cmac.SessionVectors;
@@ -40,7 +41,8 @@ public class RealWorldTable5NumericCounterVerificationTests
         new OddByteOffsetTruncationPolicy(),
         new Base64MasterKeyCodec(),
         new HexUidCodec(),
-        new NumericLittleEndianCounterCodec());
+        new NumericLittleEndianCounterCodec(),
+        new FixedTimeMacEqualityComparer());
 
     [Fact]
     public void Verify_RealCapturedTuple_ReturnsTrue()
@@ -66,7 +68,8 @@ public class RealWorldTable5NumericCounterVerificationTests
             new OddByteOffsetTruncationPolicy(),
             new Base64MasterKeyCodec(),
             new HexUidCodec(),
-            new LiteralHexCounterCodec());
+            new LiteralHexCounterCodec(),
+            new FixedTimeMacEqualityComparer());
 
         bool result = verifier.Verify(new Ntag424SdmCmacRequest(
             UidHex, CounterHex, MacHex, MasterKeyBase64, MirroredData));
@@ -87,7 +90,8 @@ public class RealWorldTable5NumericCounterVerificationTests
             new OddByteOffsetTruncationPolicy(),
             new Base64MasterKeyCodec(),
             new HexUidCodec(),
-            new NumericLittleEndianCounterCodec());
+            new NumericLittleEndianCounterCodec(),
+            new FixedTimeMacEqualityComparer());
 
         bool result = verifier.Verify(new Ntag424SdmCmacRequest(
             UidHex, CounterHex, MacHex, MasterKeyBase64, MirroredData));

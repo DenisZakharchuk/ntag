@@ -41,6 +41,9 @@ artifacts/
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
+# BenchmarkDotNet output
+BenchmarkDotNet.Artifacts/
+
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
 
